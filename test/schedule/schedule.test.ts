@@ -9,7 +9,10 @@ import { db } from "@/lib/db";
 import { createPost } from "@/lib/posts/service";
 import { runSchedulerTick } from "@/lib/schedule/tick";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
-import { createMeme } from "@/test/helpers/factories";
+import {
+	createMeme,
+	createPost as createPostRow,
+} from "@/test/helpers/factories";
 import { apiRequest, json, TEST_USER } from "@/test/helpers/http";
 import { ADMIN_USER } from "@/test/helpers/users";
 
@@ -230,5 +233,37 @@ describeWithDb("schedule API and scheduler tick", () => {
 			(await db().post.findUniqueOrThrow({ where: { id: post.id } }))
 				.scheduledAt,
 		).toBeNull();
+	});
+
+	it("re-slots posts overdue by more than 2h but publishes recent ones", async () => {
+		await db().scheduleSlot.create({
+			data: { weekday: 1, time: "10:00", enabled: true },
+		});
+		const now = new Date("2026-11-14T12:00:00Z");
+		const mk = async () => (await createMeme({ status: "approved" })).id;
+		const old = await createPostRow([await mk()], {
+			status: "queued",
+			scheduledAt: new Date(now.getTime() - 3 * 3600 * 1000),
+			queuePosition: 1,
+		});
+		const recent = await createPostRow([await mk()], {
+			status: "queued",
+			scheduledAt: new Date(now.getTime() - 30 * 60 * 1000),
+			queuePosition: 2,
+		});
+		const enqueueFn = vi.fn().mockResolvedValue("job");
+
+		const result = await runSchedulerTick(now, enqueueFn);
+
+		expect(enqueueFn).toHaveBeenCalledTimes(1);
+		expect(enqueueFn.mock.calls[0]?.[1]).toEqual({ postId: recent.id });
+		expect(result.enqueued).toBe(1);
+		const oldAfter = await db().post.findUniqueOrThrow({
+			where: { id: old.id },
+		});
+		expect(oldAfter.status).toBe("queued");
+		expect(oldAfter.queuePosition).toBe(1);
+		// Back in the slot pool: assigned a future slot in the same tick.
+		expect(oldAfter.scheduledAt?.getTime()).toBeGreaterThan(now.getTime());
 	});
 });
