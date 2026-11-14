@@ -337,4 +337,22 @@ describe("instagram graph client", () => {
 			expect(err.message).toContain("[REDACTED]");
 		}
 	});
+
+	it("uses INSTAGRAM_GRAPH_VERSION from the environment", async () => {
+		vi.stubEnv("INSTAGRAM_GRAPH_VERSION", "v99.0");
+		try {
+			const mockFetch = vi
+				.fn()
+				.mockResolvedValue(Response.json({ id: "1", username: "u" }));
+			const client = createGraphClient({
+				fetch: mockFetch as unknown as typeof fetch,
+			});
+			await client.me("tok");
+			expect(String(mockFetch.mock.calls[0]?.[0])).toContain(
+				"graph.instagram.com/v99.0/me",
+			);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
 });

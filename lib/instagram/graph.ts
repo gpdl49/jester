@@ -96,7 +96,9 @@ export type PublishingLimitResult = {
 };
 
 export function createGraphClient(options: GraphClientOptions = {}) {
-	const version = options.version ?? "v25.0";
+	// INSTAGRAM_GRAPH_VERSION (docs/memes.md) unless a caller pins one
+	const version =
+		options.version ?? process.env.INSTAGRAM_GRAPH_VERSION ?? "v25.0";
 	const customFetch = options.fetch ?? fetch;
 	const graphBase = `https://graph.instagram.com/${version}`;
 	const oauthBase = "https://api.instagram.com/oauth";

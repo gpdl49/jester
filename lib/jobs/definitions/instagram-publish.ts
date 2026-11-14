@@ -14,7 +14,9 @@ export const instagramPublish = defineJob({
 		retryLimit: 2,
 		retryDelay: 120,
 		retryBackoff: true,
-		policy: "singleton",
+		// One waiting and one active job per postId (singletonKey), so the
+		// scheduler tick cannot pile up duplicates while the worker is busy.
+		policy: "stately",
 	},
 	handler: async (data) => {
 		await publishPost(data.postId);
