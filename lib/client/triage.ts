@@ -103,10 +103,12 @@ export function useTriageDecisions() {
 	return useMutation({
 		mutationFn: (decisions: TriageDecisionItem[]) =>
 			postTriageDecisions(decisions),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: queryKeys.triage });
-			queryClient.invalidateQueries({ queryKey: queryKeys.stats });
-		},
+		// Returned so the mutation stays pending until the list has refetched.
+		onSuccess: () =>
+			Promise.all([
+				queryClient.invalidateQueries({ queryKey: queryKeys.triage }),
+				queryClient.invalidateQueries({ queryKey: queryKeys.stats }),
+			]),
 	});
 }
 

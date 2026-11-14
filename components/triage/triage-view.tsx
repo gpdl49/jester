@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/feedback";
 import type { TriageCandidateDto, TriageStatus } from "@/lib/api/types";
 import {
+	postTriageDecisions,
 	useTriageAcceptAbove,
 	useTriageCandidates,
 	useTriageDecisions,
@@ -60,10 +61,15 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 		}[]
 	>([]);
 
-	const pendingIdsSet = useMemo(
-		() => new Set(pendingDecisions.map((p) => p.id)),
-		[pendingDecisions],
-	);
+	// Ids whose decision has been sent but whose refetch hasn't landed yet;
+	// keeps them hidden so they can't flash back and be decided twice.
+	const [inFlightIds, setInFlightIds] = useState<Set<string>>(new Set());
+
+	const pendingIdsSet = useMemo(() => {
+		const ids = new Set(pendingDecisions.map((p) => p.id));
+		for (const id of inFlightIds) ids.add(id);
+		return ids;
+	}, [pendingDecisions, inFlightIds]);
 
 	// Filter out optimistically decided items
 	const visibleCandidates = useMemo(
@@ -93,29 +99,49 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 	const timerRef = useRef<NodeJS.Timeout | null>(null);
 	const countdownRef = useRef<NodeJS.Timeout | null>(null);
 
-	const flushPendingDecisions = useCallback(async () => {
+	// Mirrors pendingDecisions so flush can read it without a state updater
+	// (updaters must be pure; StrictMode runs them twice).
+	const pendingRef = useRef(pendingDecisions);
+	pendingRef.current = pendingDecisions;
+
+	const flushPendingDecisions = useCallback(() => {
 		if (timerRef.current) clearTimeout(timerRef.current);
 		if (countdownRef.current) clearInterval(countdownRef.current);
 		timerRef.current = null;
 		countdownRef.current = null;
 
-		setPendingDecisions((current) => {
-			if (current.length > 0) {
-				const batch = current.map((p) => ({
-					immichAssetId: p.id,
-					decision: p.decision,
-				}));
-				decisionsMutation.mutate(batch);
-			}
-			return [];
-		});
+		const current = pendingRef.current;
+		if (current.length === 0) return;
+		pendingRef.current = [];
+		setPendingDecisions([]);
+
+		const ids = current.map((p) => p.id);
+		setInFlightIds((prev) => new Set([...prev, ...ids]));
+		decisionsMutation.mutate(
+			current.map((p) => ({ immichAssetId: p.id, decision: p.decision })),
+			{
+				onSettled: () =>
+					setInFlightIds((prev) => {
+						const next = new Set(prev);
+						for (const id of ids) next.delete(id);
+						return next;
+					}),
+			},
+		);
 	}, [decisionsMutation]);
 
-	// Flush on unmount or when status changes
+	// Navigating away applies what the user already decided instead of
+	// silently dropping it.
 	useEffect(() => {
 		return () => {
 			if (timerRef.current) clearTimeout(timerRef.current);
 			if (countdownRef.current) clearInterval(countdownRef.current);
+			const current = pendingRef.current;
+			if (current.length > 0) {
+				void postTriageDecisions(
+					current.map((p) => ({ immichAssetId: p.id, decision: p.decision })),
+				).catch(() => {});
+			}
 		};
 	}, []);
 
