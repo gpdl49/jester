@@ -733,6 +733,56 @@ describeWithDb("memes service", () => {
 			}
 		});
 
+		it("cancels a draft left empty, renumbers others and removes ig renditions", async () => {
+			const fakeS3 = installFakeS3();
+			try {
+				const a = await createMeme({});
+				const b = await createMeme({});
+				const c = await createMeme({});
+				const solo = await createPost([a.id], { status: "draft" });
+				const failed = await createPost([a.id, b.id, c.id], {
+					status: "failed",
+				});
+				for (const p of [solo, failed]) {
+					for (let i = 0; i < p.items.length; i++) {
+						fakeS3.upload(`ig/${p.id}/${i}.jpg`, new Uint8Array([1]));
+					}
+				}
+
+				await deleteMeme(a.id, adminViewer);
+
+				const soloAfter = await db().post.findUniqueOrThrow({
+					where: { id: solo.id },
+					include: { items: true },
+				});
+				expect(soloAfter.items).toHaveLength(0);
+				expect(soloAfter.status).toBe("cancelled");
+
+				const failedAfter = await db().post.findUniqueOrThrow({
+					where: { id: failed.id },
+					include: { items: { orderBy: { position: "asc" } } },
+				});
+				expect(failedAfter.status).toBe("failed");
+				expect(failedAfter.kind).toBe("carousel");
+				expect(failedAfter.items.map((i) => [i.memeId, i.position])).toEqual([
+					[b.id, 0],
+					[c.id, 1],
+				]);
+				expect(
+					[...fakeS3.objects.keys()].filter((k) => k.startsWith("ig/")),
+				).toEqual([]);
+
+				// Down to a single item: kind becomes image.
+				await deleteMeme(b.id, adminViewer);
+				const single = await db().post.findUniqueOrThrow({
+					where: { id: failed.id },
+				});
+				expect(single.kind).toBe("image");
+			} finally {
+				fakeS3.restore();
+			}
+		});
+
 		it("deletes S3 objects and row and writes audit event", async () => {
 			const fakeS3 = installFakeS3();
 			try {
