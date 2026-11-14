@@ -57,7 +57,7 @@ describe("instagram graph client", () => {
 			tokenType: "bearer",
 			expiresIn: 5184000,
 		});
-		const calledUrl = mockFetch.mock.calls[0][0] as string;
+		const calledUrl = (mockFetch.mock.calls[0]?.[0] as string) ?? "";
 		expect(calledUrl).toContain("https://graph.instagram.com/access_token");
 		expect(calledUrl).toContain("grant_type=ig_exchange_token");
 	});
@@ -84,7 +84,7 @@ describe("instagram graph client", () => {
 			tokenType: "bearer",
 			expiresIn: 5184000,
 		});
-		const calledUrl = mockFetch.mock.calls[0][0] as string;
+		const calledUrl = (mockFetch.mock.calls[0]?.[0] as string) ?? "";
 		expect(calledUrl).toContain("grant_type=ig_refresh_token");
 	});
 
@@ -237,7 +237,7 @@ describe("instagram graph client", () => {
 		const recent = await client.recentMedia("ig_user_1", 10, "tok");
 
 		expect(recent.data).toHaveLength(1);
-		expect(recent.data[0].id).toBe("m1");
+		expect(recent.data[0]?.id).toBe("m1");
 	});
 
 	it("fetches publishing limit", async () => {

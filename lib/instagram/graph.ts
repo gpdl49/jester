@@ -505,10 +505,12 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 
 			if (Array.isArray(res.data) && res.data.length > 0) {
 				const entry = res.data[0];
-				return {
-					used: entry.quota_usage ?? 0,
-					total: entry.config?.quota_total ?? 100,
-				};
+				if (entry) {
+					return {
+						used: entry.quota_usage ?? 0,
+						total: entry.config?.quota_total ?? 100,
+					};
+				}
 			}
 
 			return {

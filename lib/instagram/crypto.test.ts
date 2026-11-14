@@ -19,7 +19,8 @@ describe("instagram crypto", () => {
 		const encrypted = encrypt(secret, testKey);
 		const raw = Buffer.from(encrypted, "base64");
 		// Tamper with ciphertext byte at the end
-		raw[raw.length - 1] ^= 0xff;
+		const lastIdx = raw.length - 1;
+		raw[lastIdx] = (raw[lastIdx] ?? 0) ^ 0xff;
 		const tampered = raw.toString("base64");
 
 		expect(() => decrypt(tampered, testKey)).toThrow();

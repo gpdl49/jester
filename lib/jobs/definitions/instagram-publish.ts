@@ -1,9 +1,11 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { publishPost } from "@/lib/instagram/publish";
+import { defineJob } from "@/lib/jobs/define";
 
 /**
- * `instagram.publish` (docs/memes.md "Jobs"). Owned by the `instagram` slice: replace the
- * handler body; keep the name and payload schema (they are the contract).
+ * `instagram.publish` (docs/memes.md "Jobs").
+ * Publishes a queued post to Instagram via Meta Graph API with container polling,
+ * rate limit deferral, and double-post protection.
  */
 export const instagramPublish = defineJob({
 	name: "instagram.publish",
@@ -14,7 +16,7 @@ export const instagramPublish = defineJob({
 		retryBackoff: true,
 		policy: "singleton",
 	},
-	handler: async (_data) => {
-		throw new PermanentJobError("instagram.publish: not implemented");
+	handler: async (data) => {
+		await publishPost(data.postId);
 	},
 });

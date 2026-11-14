@@ -87,33 +87,24 @@ export async function computeEdgeMedianColor(
 		const gVals: number[] = [];
 		const bVals: number[] = [];
 
+		const pushPixel = (idx: number) => {
+			const r = data[idx];
+			const g = data[idx + 1];
+			const b = data[idx + 2];
+			if (r !== undefined) rVals.push(r);
+			if (g !== undefined) gVals.push(g);
+			if (b !== undefined) bVals.push(b);
+		};
+
 		const { width, height, channels } = info;
 		for (let x = 0; x < width; x++) {
-			// Top row
-			const topIdx = x * channels;
-			rVals.push(data[topIdx]);
-			gVals.push(data[topIdx + 1]);
-			bVals.push(data[topIdx + 2]);
-
-			// Bottom row
-			const botIdx = ((height - 1) * width + x) * channels;
-			rVals.push(data[botIdx]);
-			gVals.push(data[botIdx + 1]);
-			bVals.push(data[botIdx + 2]);
+			pushPixel(x * channels);
+			pushPixel(((height - 1) * width + x) * channels);
 		}
 
 		for (let y = 1; y < height - 1; y++) {
-			// Left column
-			const leftIdx = y * width * channels;
-			rVals.push(data[leftIdx]);
-			gVals.push(data[leftIdx + 1]);
-			bVals.push(data[leftIdx + 2]);
-
-			// Right column
-			const rightIdx = (y * width + width - 1) * channels;
-			rVals.push(data[rightIdx]);
-			gVals.push(data[rightIdx + 1]);
-			bVals.push(data[rightIdx + 2]);
+			pushPixel(y * width * channels);
+			pushPixel((y * width + width - 1) * channels);
 		}
 
 		const median = (arr: number[]) => {
@@ -231,9 +222,9 @@ export async function renderPost(postId: string): Promise<string[]> {
 
 	const writtenKeys: string[] = [];
 
-	for (let i = 0; i < post.items.length; i++) {
-		const item = post.items[i];
+	for (const [i, item] of post.items.entries()) {
 		const sourceBuf = sourceBuffers[i];
+		if (!sourceBuf) continue;
 		const { buffer } = await renderImageBuffer(sourceBuf, carouselRatio);
 		const key = instagramKey(postId, item.position);
 		await putObject(key, buffer, "image/jpeg");
