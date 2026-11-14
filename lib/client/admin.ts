@@ -1,6 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	useInfiniteQuery,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import type {
 	AiUsageDayDto,
 	AuditEventDto,
@@ -57,6 +62,24 @@ export function useAuditEvents(params?: {
 				cursor: params?.cursor,
 				limit: params?.limit,
 			}),
+	});
+}
+
+/** Audit log pages, newest first; `fetchNextPage` follows `nextCursor`. */
+export function useAuditEventPages(params?: {
+	action?: string;
+	limit?: number;
+}) {
+	return useInfiniteQuery({
+		queryKey: [...queryKeys.audit, "pages", params?.action, params?.limit],
+		initialPageParam: undefined as string | undefined,
+		queryFn: ({ pageParam }) =>
+			api.get<Paged<AuditEventDto>>("/audit", {
+				action: params?.action,
+				cursor: pageParam,
+				limit: params?.limit,
+			}),
+		getNextPageParam: (last) => last.nextCursor ?? undefined,
 	});
 }
 

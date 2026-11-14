@@ -94,7 +94,9 @@ describe("DashboardView component", () => {
 		expect(screen.getByText("7")).toBeInTheDocument(); // Inbox
 		expect(screen.getByText("14")).toBeInTheDocument(); // Approved
 		expect(screen.getByText("4")).toBeInTheDocument(); // Queued
-		expect(screen.getByText("25")).toBeInTheDocument(); // Published
+		expect(screen.getByText("Archived")).toBeInTheDocument();
+		expect(screen.queryByText("Published")).not.toBeInTheDocument();
+		expect(screen.getByText("25")).toBeInTheDocument(); // Archived
 
 		// 2. Feature chips
 		expect(screen.getByText("AI active")).toBeInTheDocument();
@@ -132,5 +134,66 @@ describe("DashboardView component", () => {
 		expect(screen.getByText("Page 3")).toBeInTheDocument();
 		expect(screen.getAllByText("1,250")).toHaveLength(2);
 		expect(screen.getByText("Healthy")).toBeInTheDocument();
+	});
+
+	it("lists the soonest scheduled queued posts, skipping unscheduled ones that sort first", async () => {
+		const post = (id: string, caption: string, scheduledAt: string | null) => ({
+			...(mockStats.nextPost as NonNullable<DashboardStatsDto["nextPost"]>),
+			id,
+			caption,
+			scheduledAt,
+		});
+		mockApi({
+			"GET /api/stats": mockStats,
+			"GET /api/ai/usage": [],
+			// API order is queue position: unscheduled first, then by creation.
+			"GET /api/posts": {
+				items: [
+					post("p0", "unscheduled one", null),
+					post("p1", "later post", "2030-01-03T10:00:00.000Z"),
+					post("p2", "soonest post", "2030-01-01T10:00:00.000Z"),
+					post("p3", "middle post", "2030-01-02T10:00:00.000Z"),
+					post("p4", "latest post", "2030-01-04T10:00:00.000Z"),
+				],
+				nextCursor: null,
+			},
+		});
+		renderWithQuery(<DashboardView />);
+		await waitFor(() =>
+			expect(screen.getByText("soonest post")).toBeInTheDocument(),
+		);
+		expect(screen.queryByText("unscheduled one")).not.toBeInTheDocument();
+		expect(screen.queryByText("latest post")).not.toBeInTheDocument();
+		expect(screen.getByText("middle post")).toBeInTheDocument();
+		expect(screen.getByText("later post")).toBeInTheDocument();
+		const [first, second, third] = [
+			"soonest post",
+			"middle post",
+			"later post",
+		].map((t) => screen.getByText(t)) as [
+			HTMLElement,
+			HTMLElement,
+			HTMLElement,
+		];
+		expect(
+			first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			second.compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	it("shows a zero daily budget as 0.00 and fully used, not as the default 3", async () => {
+		mockApi({
+			"GET /api/stats": {
+				...mockStats,
+				aiSpend: { todayUsd: 0, monthUsd: 0, dailyBudgetUsd: 0 },
+			},
+			"GET /api/ai/usage": [],
+		});
+		renderWithQuery(<DashboardView />);
+		await waitFor(() =>
+			expect(screen.getByText("Today: $0.0000 of $0.00")).toBeInTheDocument(),
+		);
 	});
 });

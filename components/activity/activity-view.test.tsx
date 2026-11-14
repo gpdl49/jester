@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditEventDto, Paged } from "@/lib/api/types";
-import { mockApi, renderWithQuery } from "@/test/helpers/dom";
+import { mockApi, renderWithQuery, requests } from "@/test/helpers/dom";
 import { ActivityView } from "./activity-view";
+
+let mockSearch = "";
+vi.mock("next/navigation", () => ({
+	useSearchParams: () => new URLSearchParams(mockSearch),
+}));
 
 const mockAuditEvents: Paged<AuditEventDto> = {
 	items: [
@@ -35,7 +40,10 @@ const mockAuditEvents: Paged<AuditEventDto> = {
 	nextCursor: null,
 };
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	mockSearch = "";
+});
 
 describe("ActivityView component", () => {
 	it("renders audit events and switches to Immich deletions tab", async () => {
@@ -70,5 +78,53 @@ describe("ActivityView component", () => {
 			"/memes/meme-uuid-1",
 		);
 		expect(screen.getByText(/Verified SHA-256:/)).toBeInTheDocument();
+	});
+
+	it("loads further pages with the cursor and appends them", async () => {
+		const event = (id: string, action: string): AuditEventDto => ({
+			id,
+			actor: null,
+			action,
+			subjectType: "meme",
+			subjectId: null,
+			data: {},
+			at: new Date().toISOString(),
+		});
+		const fetchMock = mockApi({
+			"GET /api/audit": (init: RequestInit | undefined) => init,
+		});
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = new URL(String(input), "http://localhost");
+			return Response.json(
+				url.searchParams.get("cursor") === "c1"
+					? { items: [event("e2", "meme.second")], nextCursor: null }
+					: { items: [event("e1", "meme.first")], nextCursor: "c1" },
+			);
+		});
+
+		renderWithQuery(<ActivityView />);
+		await waitFor(() =>
+			expect(screen.getByText("meme.first")).toBeInTheDocument(),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+		await waitFor(() =>
+			expect(screen.getByText("meme.second")).toBeInTheDocument(),
+		);
+		expect(screen.getByText("meme.first")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Load more" }),
+		).not.toBeInTheDocument();
+		const searches = requests(fetchMock).map((r) => r.search);
+		expect(searches.some((q) => q.includes("cursor=c1"))).toBe(true);
+	});
+
+	it("applies ?action= from the URL as the filter", async () => {
+		mockSearch = "action=immich.delete";
+		const fetchMock = mockApi({ "GET /api/audit": mockAuditEvents });
+		renderWithQuery(<ActivityView />);
+		await waitFor(() =>
+			expect(screen.getAllByText("DONE")[0]).toBeInTheDocument(),
+		);
+		expect(requests(fetchMock)[0]?.search).toContain("action=immich.delete");
 	});
 });

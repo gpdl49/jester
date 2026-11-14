@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { InstagramAccounts } from "@/components/instagram/instagram-accounts";
+import { ScheduleSlotsEditor } from "@/components/schedule/schedule-slots-editor";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm";
 import { ErrorText, Loading } from "@/components/ui/feedback";
@@ -21,8 +23,6 @@ import { Field, Input, Textarea } from "@/components/ui/field";
 import type { SettingsDto } from "@/lib/api/types";
 import { useSettings, useUpdateSettings } from "@/lib/client/admin";
 import { useCurrentUser } from "@/lib/client/current-user";
-import { InstagramAccountsPlaceholder } from "./instagram-accounts-placeholder";
-import { ScheduleSlotsPlaceholder } from "./schedule-slots-placeholder";
 
 export function SettingsView() {
 	const me = useCurrentUser();
@@ -37,7 +37,11 @@ export function SettingsView() {
 		}
 	}, [searchParams]);
 
-	if (!me?.isAdmin) {
+	if (!me) {
+		return <Loading label="Loading settings…" />;
+	}
+
+	if (!me.isAdmin) {
 		return (
 			<div className="mx-auto max-w-2xl py-16 text-center">
 				<ShieldAlert className="mx-auto size-12 text-muted" />
@@ -88,7 +92,7 @@ export function SettingsView() {
 					<Camera className="size-5 text-accent" />
 					Instagram Integration
 				</h2>
-				<InstagramAccountsPlaceholder />
+				<InstagramAccounts />
 			</section>
 
 			{/* Posting Schedule Section */}
@@ -97,7 +101,7 @@ export function SettingsView() {
 					<Calendar className="size-5 text-accent" />
 					Posting Schedule
 				</h2>
-				<ScheduleSlotsPlaceholder />
+				<ScheduleSlotsEditor />
 			</section>
 
 			{/* Triage & Prefilter Settings */}

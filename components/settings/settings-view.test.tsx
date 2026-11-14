@@ -4,7 +4,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MeDto, SettingsDto } from "@/lib/api/types";
 import { CurrentUserContext } from "@/lib/client/current-user";
-import { mockApi, renderWithQuery } from "@/test/helpers/dom";
+import { mockApi, renderWithQuery, requests } from "@/test/helpers/dom";
 import { SettingsView } from "./settings-view";
 
 const mockSearchParams = new URLSearchParams();
@@ -64,8 +64,10 @@ describe("SettingsView component", () => {
 	});
 
 	it("renders all sections for admin users", async () => {
-		mockApi({
+		const fetchMock = mockApi({
 			"GET /api/settings": initialSettings,
+			"GET /api/instagram/accounts": [],
+			"GET /api/schedule/slots": [],
 		});
 
 		renderWithQuery(
@@ -86,6 +88,24 @@ describe("SettingsView component", () => {
 		expect(screen.getByText("Captions & Credits")).toBeInTheDocument();
 		expect(screen.getByText("AI Configuration & Spend")).toBeInTheDocument();
 		expect(screen.getByText("Emergency Kill Switches")).toBeInTheDocument();
+
+		// The real Instagram and schedule components are embedded (they fetch
+		// their own data), not placeholders.
+		await waitFor(() => {
+			const paths = requests(fetchMock).map((r) => `${r.method} ${r.path}`);
+			expect(paths).toContain("GET /api/instagram/accounts");
+			expect(paths).toContain("GET /api/schedule/slots");
+		});
+	});
+
+	it("shows a loading state, not 'Admins only', until the current user is known", () => {
+		mockApi({ "GET /api/settings": initialSettings });
+		renderWithQuery(
+			<CurrentUserContext.Provider value={null}>
+				<SettingsView />
+			</CurrentUserContext.Provider>,
+		);
+		expect(screen.queryByText("Admins only")).not.toBeInTheDocument();
 	});
 
 	it("toggles auto-accept and displays permanent deletion warning", async () => {

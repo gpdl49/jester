@@ -2,6 +2,7 @@ import { beforeEach, expect, it } from "vitest";
 import { GET } from "@/app/api/audit/route";
 import type { AuditEventDto, Paged } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
+import { db } from "@/lib/db";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
 import { apiRequest, json, routeParams, TEST_USER } from "@/test/helpers/http";
 import { ADMIN_USER, userId } from "@/test/helpers/users";
@@ -116,5 +117,40 @@ describeWithDb("audit API", () => {
 		expect(page3.items).toHaveLength(1);
 		expect(page3.items[0]?.action).toBe("test.event_1");
 		expect(page3.nextCursor).toBeNull();
+	});
+
+	it("GET /api/audit rejects a malformed cursor with 400", async () => {
+		const res = await GET(
+			apiRequest("/api/audit?cursor=not-a-uuid", { user: TEST_USER }),
+			routeParams({}),
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("GET /api/audit pages through events with identical timestamps without gaps or repeats", async () => {
+		const at = new Date("2026-11-01T00:00:00.000Z");
+		await db().auditEvent.createMany({
+			data: Array.from({ length: 5 }, (_, i) => ({
+				action: `same.${i}`,
+				subjectType: "test",
+				data: {},
+				at,
+			})),
+		});
+		const seen: string[] = [];
+		let cursor: string | null = null;
+		for (let guard = 0; guard < 5; guard++) {
+			const res = await GET(
+				apiRequest(`/api/audit?limit=2${cursor ? `&cursor=${cursor}` : ""}`, {
+					user: TEST_USER,
+				}),
+				routeParams({}),
+			);
+			const page: Paged<AuditEventDto> = await json(res);
+			seen.push(...page.items.map((e) => e.action));
+			cursor = page.nextCursor;
+			if (!cursor) break;
+		}
+		expect(seen.sort()).toEqual([0, 1, 2, 3, 4].map((i) => `same.${i}`));
 	});
 });
