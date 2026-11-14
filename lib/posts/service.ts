@@ -14,24 +14,52 @@ import { instagramPublish } from "@/lib/jobs/definitions/instagram-publish";
 import { enqueue } from "@/lib/jobs/queue";
 import { renderCaption } from "@/lib/posts/caption";
 
+/**
+ * A Postgres serialization failure. With the pg driver adapter Prisma does not
+ * report P2034: the error is a DriverAdapterError whose cause (kind
+ * TransactionWriteConflict, originalCode 40001) says so.
+ */
+export function isSerializationFailure(err: unknown): boolean {
+	for (
+		let e: unknown = err, depth = 0;
+		e && typeof e === "object" && depth < 5;
+		e = (e as { cause?: unknown }).cause, depth++
+	) {
+		const { code, originalCode, kind } = e as {
+			code?: unknown;
+			originalCode?: unknown;
+			kind?: unknown;
+		};
+		if (
+			code === "P2034" ||
+			originalCode === "40001" ||
+			kind === "TransactionWriteConflict"
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
 async function runSerializable<T>(
 	fn: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
-	try {
-		return await db().$transaction(fn, {
-			isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-		});
-	} catch (err) {
-		if (
-			err instanceof Prisma.PrismaClientKnownRequestError &&
-			err.code === "P2034"
-		) {
-			// Serialization failure: retry once
+	// Concurrent writers can abort each other (P2034); retry a few times so the
+	// loser re-reads and reports a proper 409 instead of a 500.
+	for (let attempt = 0; ; attempt++) {
+		try {
 			return await db().$transaction(fn, {
 				isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
 			});
+		} catch (err) {
+			if (isSerializationFailure(err)) {
+				if (attempt >= 4) {
+					throw conflict("Concurrent update, please retry");
+				}
+				continue;
+			}
+			throw err;
 		}
-		throw err;
 	}
 }
 
@@ -92,8 +120,8 @@ export async function createPost(
 			);
 		}
 
-		// 3. Instagram account check if queued
-		if (status === "queued" && accountId) {
+		// 3. Instagram account must exist when given
+		if (accountId) {
 			const account = await tx.instagramAccount.findUnique({
 				where: { id: accountId },
 			});
@@ -184,6 +212,17 @@ export async function patchPost(
 			dataToUpdate.caption = input.caption;
 		}
 
+		// Anything that changes what Instagram would receive invalidates the
+		// containers of an earlier attempt (they hold the old caption/images).
+		const contentChanged =
+			(input.caption !== undefined && input.caption !== post.caption) ||
+			input.memeIds !== undefined ||
+			input.altTexts !== undefined;
+		if (contentChanged && post.containerIds.length > 0) {
+			dataToUpdate.containerIds = [];
+			dataToUpdate.containerAt = null;
+		}
+
 		if (input.scheduledAt !== undefined) {
 			dataToUpdate.scheduledAt = input.scheduledAt;
 			if (input.scheduledAt === null) {
@@ -196,7 +235,25 @@ export async function patchPost(
 			if (input.status === "cancelled") {
 				dataToUpdate.queuePosition = null;
 			} else if (input.status === "queued" && post.status !== "queued") {
-				if (!post.scheduledAt && input.scheduledAt === undefined) {
+				if (post.status === "failed") {
+					// Retry from failed: fresh attempt budget
+					dataToUpdate.attempts = 0;
+					dataToUpdate.error = null;
+				}
+				const effectiveScheduledAt =
+					input.scheduledAt !== undefined
+						? input.scheduledAt
+						: post.scheduledAt;
+				if (
+					input.scheduledAt === undefined &&
+					effectiveScheduledAt &&
+					effectiveScheduledAt.getTime() <= Date.now()
+				) {
+					// A stale slot from an earlier life: take the next free slot
+					dataToUpdate.scheduledAt = null;
+					dataToUpdate.slot = { disconnect: true };
+				}
+				if (!effectiveScheduledAt || dataToUpdate.scheduledAt === null) {
 					const lastQueued = await tx.post.findFirst({
 						where: { status: "queued", scheduledAt: null },
 						orderBy: { queuePosition: "desc" },
@@ -266,6 +323,35 @@ export async function patchPost(
 			}
 		}
 
+		// Bringing a cancelled post back: its memes may have joined another
+		// post (or been unapproved) while it was cancelled.
+		if (
+			post.status === "cancelled" &&
+			(input.status === "draft" || input.status === "queued") &&
+			input.memeIds === undefined
+		) {
+			const memeIds = post.items.map((i) => i.memeId);
+			const taken = await tx.postItem.findFirst({
+				where: {
+					memeId: { in: memeIds },
+					postId: { not: id },
+					post: { status: { not: "cancelled" } },
+				},
+				select: { memeId: true, postId: true },
+			});
+			if (taken) {
+				throw conflict(
+					`Meme ${taken.memeId} is already in another active post (${taken.postId})`,
+				);
+			}
+			const unapproved = await tx.meme.count({
+				where: { id: { in: memeIds }, status: { not: "approved" } },
+			});
+			if (unapproved > 0) {
+				throw unprocessable("All memes in a post must be approved");
+			}
+		}
+
 		await tx.post.update({
 			where: { id },
 			data: dataToUpdate,
@@ -315,15 +401,20 @@ export async function publishNow(
 		throw conflict(`Cannot publish-now a post with status ${post.status}`);
 	}
 
-	const now = new Date();
-
-	await db().post.update({
-		where: { id },
+	// Conditional on the status we just saw: the publisher may have claimed the
+	// post in the meantime, and moving a publishing post back to queued would
+	// let a second job publish it again.
+	const moved = await db().post.updateMany({
+		where: { id, status: { in: ["draft", "queued"] } },
 		data: {
 			status: "queued",
-			scheduledAt: now,
+			scheduledAt: new Date(),
+			queuePosition: null,
 		},
 	});
+	if (moved.count === 0) {
+		throw conflict("Post is already being published");
+	}
 
 	await enqueue(instagramPublish, { postId: id }, { singletonKey: id });
 
@@ -357,8 +448,16 @@ export async function reorderPosts(ids: string[]): Promise<void> {
 			}
 		}
 
-		for (let i = 0; i < ids.length; i++) {
-			const postId = ids[i];
+		// Listed posts first, then any other unscheduled queued posts in their
+		// current order, so positions never collide.
+		const others = await tx.post.findMany({
+			where: { status: "queued", scheduledAt: null, id: { notIn: ids } },
+			orderBy: [{ queuePosition: "asc" }, { createdAt: "asc" }],
+			select: { id: true },
+		});
+		const order = [...ids, ...others.map((o) => o.id)];
+		for (let i = 0; i < order.length; i++) {
+			const postId = order[i];
 			if (postId) {
 				await tx.post.update({
 					where: { id: postId },
