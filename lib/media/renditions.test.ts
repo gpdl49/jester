@@ -211,4 +211,38 @@ describeWithDb("media renditions", () => {
 		const meta = await sharp(displayObj?.body).metadata();
 		expect(meta.format).toBe("webp");
 	});
+
+	it("near-duplicate links point newer -> older and never form a cycle, in either run order", async () => {
+		const older = await createMeme({
+			contentType: "image/png",
+			renditionsReady: false,
+			createdAt: new Date("2026-01-01T00:00:00Z"),
+		});
+		const newer = await createMeme({
+			contentType: "image/png",
+			renditionsReady: false,
+			createdAt: new Date("2026-01-02T00:00:00Z"),
+		});
+		const img1 = await (await twoTone(1000, 800)).png().toBuffer();
+		const img2 = await sharp(img1).resize(800, 640).png().toBuffer();
+		fakeS3.upload(
+			memeKey(older.id, "original", "image/png"),
+			img1,
+			"image/png",
+		);
+		fakeS3.upload(
+			memeKey(newer.id, "original", "image/png"),
+			img2,
+			"image/png",
+		);
+
+		// Concurrent jobs: the newer one finishes first, the older one second.
+		await generateRenditions(newer.id);
+		await generateRenditions(older.id);
+
+		const o = await db().meme.findUniqueOrThrow({ where: { id: older.id } });
+		const n = await db().meme.findUniqueOrThrow({ where: { id: newer.id } });
+		expect(o.duplicateOfId).toBeNull();
+		expect(n.duplicateOfId).toBe(older.id);
+	});
 });

@@ -25,7 +25,10 @@ export async function computeBlurhash(
  * Generates display and thumbnail WebP renditions, calculates blurhash and 64-bit dHash,
  * performs near-duplicate detection against older memes, and marks renditionsReady.
  */
-export async function generateRenditions(memeId: string): Promise<void> {
+export async function generateRenditions(
+	memeId: string,
+	options: { immichId?: string } = {},
+): Promise<void> {
 	const meme = await db().meme.findUnique({ where: { id: memeId } });
 	if (!meme) {
 		throw new PermanentJobError(`Meme ${memeId} not found`);
@@ -39,11 +42,14 @@ export async function generateRenditions(memeId: string): Promise<void> {
 
 	if (meme.contentType === "image/heic" || meme.contentType === "image/heif") {
 		// Sharp has no HEVC decoder; use Immich's fullsize JPEG thumbnail
-		const asset = await db().immichAsset.findFirst({
-			where: { memeId: meme.id },
-		});
-		if (asset) {
-			const thumb = await immich().getThumbnail(asset.immichId, "fullsize");
+		// The import passes the asset explicitly (it is not linked yet when the meme
+		// is a duplicate); otherwise look up the linked asset.
+		const immichId =
+			options.immichId ??
+			(await db().immichAsset.findFirst({ where: { memeId: meme.id } }))
+				?.immichId;
+		if (immichId) {
+			const thumb = await immich().getThumbnail(immichId, "fullsize");
 			sourceBuffer = Buffer.from(thumb.bytes);
 		} else {
 			const bytes = await getObjectBytes(
@@ -89,53 +95,42 @@ export async function generateRenditions(memeId: string): Promise<void> {
 	const dhash = await computeDHash(displayBuffer);
 	const blurhash = await computeBlurhash(displayBuffer);
 
-	// Duplicate detection (Hamming distance <= 6 against older memes)
-	let duplicateOfId: string | null = null;
-	const prefix = dhash.slice(0, 4);
-
-	// Prefilter by first 4 hex chars
-	const bucketCandidates = await db().meme.findMany({
-		where: {
-			id: { not: meme.id },
-			dhash: { startsWith: prefix },
-		},
-		select: { id: true, dhash: true, createdAt: true },
-		orderBy: { createdAt: "asc" },
+	// Near-duplicate detection (Hamming distance <= 6). Links always point from
+	// the newer meme to the older one, so they can never form a cycle. Both
+	// directions are checked because renditions of two memes may run
+	// concurrently, and the older one may not have had its dHash yet when the
+	// newer one looked.
+	const candidates = await db().meme.findMany({
+		where: { id: { not: meme.id }, dhash: { not: null } },
+		select: { id: true, dhash: true, createdAt: true, duplicateOfId: true },
+		orderBy: [{ createdAt: "asc" }, { id: "asc" }],
 	});
-
-	const matchingBucket = bucketCandidates.filter(
+	const near = candidates.filter(
 		(c) => c.dhash && hammingDistance(dhash, c.dhash) <= 6,
 	);
-
-	if (matchingBucket.length > 0) {
-		duplicateOfId = matchingBucket[0]?.id ?? null;
-	} else {
-		// Prefilter missed: compare all memes with a dhash
-		const allMemes = await db().meme.findMany({
-			where: {
-				id: { not: meme.id },
-				dhash: { not: null },
-			},
-			select: { id: true, dhash: true, createdAt: true },
-			orderBy: { createdAt: "asc" },
-		});
-
-		const allMatches = allMemes.filter(
-			(m) => m.dhash && hammingDistance(dhash, m.dhash) <= 6,
-		);
-
-		if (allMatches.length > 0) {
-			duplicateOfId = allMatches[0]?.id ?? null;
-		}
-	}
+	const isOlder = (c: { createdAt: Date; id: string }) =>
+		c.createdAt < meme.createdAt ||
+		(c.createdAt.getTime() === meme.createdAt.getTime() && c.id < meme.id);
+	const olderNear = near.filter(isOlder);
+	const duplicateOfId = olderNear[0]?.id ?? null;
+	const newerUnlinked = near.filter((c) => !isOlder(c) && !c.duplicateOfId);
 
 	await db().meme.update({
 		where: { id: meme.id },
 		data: {
 			dhash,
 			blurhash,
-			duplicateOfId: duplicateOfId ?? meme.duplicateOfId,
+			duplicateOfId: meme.duplicateOfId ?? duplicateOfId,
 			renditionsReady: true,
 		},
 	});
+	if (newerUnlinked.length > 0) {
+		await db().meme.updateMany({
+			where: {
+				id: { in: newerUnlinked.map((c) => c.id) },
+				duplicateOfId: null,
+			},
+			data: { duplicateOfId: meme.id },
+		});
+	}
 }
