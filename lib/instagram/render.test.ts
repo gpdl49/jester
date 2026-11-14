@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
+import { rotatedExifJpeg } from "@/test/fixtures/images";
 import {
 	computeEdgeMedianColor,
 	MAX_ASPECT_RATIO,
@@ -146,5 +147,17 @@ describe("instagram rendition", () => {
 			expect(meta.width).toBe(1080);
 			expect(meta.height).toBe(565);
 		});
+	});
+
+	it("applies the EXIF orientation before computing geometry", async () => {
+		// Stored 200x100, displayed 100x200 (taller than 4:5): padded left/right
+		const { buffer, geometry } = await renderImageBuffer(
+			await rotatedExifJpeg(),
+		);
+		expect(geometry.aspectRatio).toBeCloseTo(0.8, 5);
+		expect(geometry.imageWidth).toBeLessThan(geometry.canvasWidth);
+		const meta = await sharp(buffer).metadata();
+		expect(meta.width).toBe(1080);
+		expect(meta.height).toBe(1350);
 	});
 });
