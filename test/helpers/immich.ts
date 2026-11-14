@@ -74,11 +74,20 @@ export function installFakeImmich(initial: FakeAsset[] = []) {
 			if (q.createdAfter) {
 				list = list.filter((a) => a.fileCreatedAt > (q.createdAfter as string));
 			}
-			list.sort((a, b) =>
-				(q.order ?? "asc") === "asc"
-					? a.updatedAt.localeCompare(b.updatedAt)
-					: b.updatedAt.localeCompare(a.updatedAt),
-			);
+			// Like the real search: takenAfter filters on fileCreatedAt (inclusive),
+			// and results come ordered by fileCreatedAt.
+			const takenAfter = (q as { takenAfter?: string }).takenAfter;
+			if (takenAfter) {
+				const t = new Date(takenAfter).getTime();
+				list = list.filter((a) => new Date(a.fileCreatedAt).getTime() >= t);
+			}
+			list.sort((a, b) => {
+				const byTaken =
+					new Date(a.fileCreatedAt).getTime() -
+					new Date(b.fileCreatedAt).getTime();
+				const cmp = byTaken || a.updatedAt.localeCompare(b.updatedAt);
+				return (q.order ?? "asc") === "asc" ? cmp : -cmp;
+			});
 			return pageOf(list, q.page, q.size);
 		},
 		async searchSmart(q: SmartSearch) {
