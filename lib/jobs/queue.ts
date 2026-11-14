@@ -14,7 +14,15 @@ const globalForBoss = globalThis as unknown as {
 
 export function getBoss(): Promise<PgBoss> {
 	globalForBoss.boss ??= (async () => {
-		const boss = new PgBoss({ connectionString: env().DATABASE_URL, max: 4 });
+		// Only the worker process supervises queues and runs cron; the web
+		// process just enqueues.
+		const worker = env().JOBS_ENABLED;
+		const boss = new PgBoss({
+			connectionString: env().DATABASE_URL,
+			max: 4,
+			supervise: worker,
+			schedule: worker,
+		});
 		boss.on("error", (err) => console.error("[jobs] pg-boss error", err));
 		await boss.start();
 		return boss;
