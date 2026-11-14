@@ -11,6 +11,21 @@ import { type FakeS3, installFakeS3 } from "@/test/helpers/s3";
 import { userId } from "@/test/helpers/users";
 import { importFromImmich, importFromUpload } from "./import";
 
+/** Puts `bytes` where a finished import would have, with S3's stored SHA-256. */
+function storeOriginal(
+	fakeS3: FakeS3,
+	meme: { id: string; contentType: string },
+	bytes: Uint8Array,
+) {
+	const key = memeKey(meme.id, "original", meme.contentType);
+	fakeS3.upload(key, bytes, meme.contentType);
+	const stored = fakeS3.objects.get(key);
+	if (stored) {
+		stored.sha256 = createHash("sha256").update(bytes).digest("base64");
+	}
+	return key;
+}
+
 const enqueuedJobs: { name: string; data: unknown }[] = [];
 
 vi.mock("@/lib/jobs/queue", () => ({
@@ -158,7 +173,10 @@ describeWithDb("media import", () => {
 
 			const existingMeme = await createMeme({
 				sha256: sha256Hex,
+				size: bytes.byteLength,
 			});
+			const existingKey = storeOriginal(fakeS3, existingMeme, bytes);
+			const before = fakeS3.objects.get(existingKey);
 
 			const asset = await createImmichAsset({
 				triageStatus: "accepted",
@@ -176,8 +194,9 @@ describeWithDb("media import", () => {
 			const result = await importFromImmich(asset.id);
 			expect(result.memeId).toBe(existingMeme.id);
 
-			// No new S3 upload
-			expect(fakeS3.objects.size).toBe(0);
+			// No new S3 upload: the verified object is untouched
+			expect(fakeS3.objects.size).toBe(1);
+			expect(fakeS3.objects.get(existingKey)).toBe(before);
 
 			// Immich asset marked imported
 			const updatedAsset = await db().immichAsset.findUniqueOrThrow({
@@ -212,17 +231,17 @@ describeWithDb("media import", () => {
 
 		it("rejects MIME type mismatch and cleans up staging object", async () => {
 			const uId = await userId();
+			// Store real PNG in staging
+			const pngBytes = await pngImage(50, 50);
 			const upload = await db().upload.create({
 				data: {
 					uploaderId: uId,
 					contentType: "image/jpeg", // declared JPEG
-					size: 1000,
+					size: pngBytes.byteLength,
 					status: "complete",
 				},
 			});
 
-			// Store real PNG in staging
-			const pngBytes = await pngImage(50, 50);
 			fakeS3.upload(uploadKey(upload.id), pngBytes, "image/jpeg");
 
 			await expect(importFromUpload(upload.id)).rejects.toThrow(
@@ -296,7 +315,9 @@ describeWithDb("media import", () => {
 
 			const existingMeme = await createMeme({
 				sha256: sha256Hex,
+				size: bytes.byteLength,
 			});
+			storeOriginal(fakeS3, existingMeme, bytes);
 
 			const upload = await db().upload.create({
 				data: {
