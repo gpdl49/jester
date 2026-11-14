@@ -2,9 +2,9 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { ActivityView } from "./activity-view";
 import type { AuditEventDto, Paged } from "@/lib/api/types";
 import { mockApi, renderWithQuery } from "@/test/helpers/dom";
+import { ActivityView } from "./activity-view";
 
 const mockAuditEvents: Paged<AuditEventDto> = {
 	items: [

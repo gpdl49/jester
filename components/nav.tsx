@@ -16,7 +16,7 @@ export function TopNav() {
 					key={href}
 					href={href}
 					aria-current={isActive(pathname, href) ? "page" : undefined}
-					className="rounded-md px-3 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 aria-[current=page]:bg-neutral-200 aria-[current=page]:text-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:aria-[current=page]:bg-neutral-800 dark:aria-[current=page]:text-white"
+					className="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors text-muted hover:text-fg hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:text-fg aria-[current=page]:font-semibold"
 				>
 					{label}
 				</Link>
@@ -31,7 +31,7 @@ export function BottomNav() {
 	return (
 		<nav
 			aria-label="Main"
-			className="print:hidden fixed inset-x-0 bottom-0 z-10 flex border-t border-neutral-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden dark:border-neutral-800 dark:bg-neutral-900/95"
+			className="print:hidden fixed inset-x-0 bottom-0 z-10 flex border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
 		>
 			{NAV_ITEMS.filter((item) => item.primary).map(
 				({ href, label, icon: Icon }) => (
@@ -39,7 +39,7 @@ export function BottomNav() {
 						key={href}
 						href={href}
 						aria-current={isActive(pathname, href) ? "page" : undefined}
-						className="flex flex-1 flex-col items-center gap-0.5 py-2 text-xs text-neutral-500 aria-[current=page]:text-brand dark:text-neutral-400 dark:aria-[current=page]:text-white"
+						className="flex flex-1 flex-col items-center gap-0.5 py-2 text-xs text-muted transition-colors hover:text-fg aria-[current=page]:text-accent aria-[current=page]:font-semibold"
 					>
 						<Icon aria-hidden className="size-5" />
 						{label}
@@ -55,24 +55,24 @@ export function MobileMenu() {
 	const me = useCurrentUser();
 	return (
 		<details className="relative md:hidden">
-			<summary className="cursor-pointer list-none rounded-md px-3 py-2 text-sm font-medium">
+			<summary className="cursor-pointer list-none rounded-lg px-3 py-1.5 text-sm font-medium text-muted hover:text-fg hover:bg-sunken transition-colors">
 				More
 			</summary>
-			<div className="absolute right-0 z-20 mt-1 flex w-44 flex-col rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
+			<div className="absolute right-0 z-20 mt-1 flex w-44 flex-col rounded-xl border border-line bg-raised p-1 shadow-xl">
 				{navItemsFor(me?.isAdmin ?? false)
 					.filter((item) => !item.primary)
 					.map(({ href, label }) => (
 						<Link
 							key={href}
 							href={href}
-							className="rounded px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+							className="rounded-lg px-3 py-2 text-sm text-fg transition-colors hover:bg-sunken"
 						>
 							{label}
 						</Link>
 					))}
 				<a
 					href="/oauth2/sign_out"
-					className="rounded px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+					className="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-sunken hover:text-fg"
 				>
 					Sign out
 				</a>

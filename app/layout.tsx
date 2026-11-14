@@ -28,15 +28,18 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 		<html lang="en">
 			<body className="min-h-dvh">
 				<Providers>
-					<header className="print:hidden sticky top-0 z-10 border-b border-neutral-200 bg-white/95 pt-[env(safe-area-inset-top)] backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
+					<header className="print:hidden sticky top-0 z-10 border-b border-line bg-surface/95 pt-[env(safe-area-inset-top)] backdrop-blur">
 						<div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-4 px-4">
-							<Link href="/" className="font-semibold tracking-tight">
+							<Link
+								href="/"
+								className="font-semibold tracking-tight text-fg text-lg"
+							>
 								Memes
 							</Link>
 							<TopNav />
 							<a
 								href="/oauth2/sign_out"
-								className="hidden text-sm text-neutral-500 hover:underline md:block"
+								className="hidden text-sm text-muted hover:text-fg hover:underline md:block"
 							>
 								Sign out
 							</a>

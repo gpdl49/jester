@@ -2,9 +2,9 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { DashboardView } from "./dashboard-view";
 import type { DashboardStatsDto } from "@/lib/api/types";
 import { mockApi, renderWithQuery } from "@/test/helpers/dom";
+import { DashboardView } from "./dashboard-view";
 
 const mockStats: DashboardStatsDto = {
 	triage: {
@@ -100,7 +100,9 @@ describe("DashboardView component", () => {
 		expect(screen.getByText("AI active")).toBeInTheDocument();
 		expect(screen.getByText("Immich sync active")).toBeInTheDocument();
 		expect(
-			screen.getByText("Immich deletion disabled (IMMICH_DELETE_ENABLED=false)"),
+			screen.getByText(
+				"Immich deletion disabled (IMMICH_DELETE_ENABLED=false)",
+			),
 		).toBeInTheDocument();
 		expect(
 			screen.getByText("Instagram: credentials not configured"),
