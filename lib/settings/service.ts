@@ -5,8 +5,8 @@ import { requireAdmin, type Viewer } from "@/lib/auth";
 import {
 	getSettings,
 	type SettingKey,
-	settingSchemas,
 	setSettings,
+	settingSchemas,
 } from "@/lib/settings";
 
 export { defaultSettings, getSetting, getSettings } from "@/lib/settings";

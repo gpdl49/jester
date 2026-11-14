@@ -26,14 +26,22 @@ export function DashboardView() {
 	const { data: stats, isLoading, error } = useDashboardStats();
 	const { data: aiUsage } = useAiUsage(30);
 
-	// Try fetching queued posts from the posts slice for the next 3 scheduled posts
-	const { data: queuedPostsData } = useQuery({
+	// /posts?status=queued is ordered by queue position, not by time, and
+	// unscheduled posts sort first; take the three scheduled posts due soonest.
+	const { data: upcomingScheduled } = useQuery({
 		queryKey: [...queryKeys.posts, "queued-upcoming"],
-		queryFn: () =>
-			api.get<Paged<PostSummaryDto>>("/posts", {
+		queryFn: async () => {
+			const page = await api.get<Paged<PostSummaryDto>>("/posts", {
 				status: "queued",
-				limit: 3,
-			}),
+				limit: 100,
+			});
+			return page.items
+				.filter((p) => p.scheduledAt !== null)
+				.sort((a, b) =>
+					(a.scheduledAt ?? "").localeCompare(b.scheduledAt ?? ""),
+				)
+				.slice(0, 3);
+		},
 		retry: false,
 	});
 
@@ -47,8 +55,8 @@ export function DashboardView() {
 
 	// Determine next posts: from /posts API if available, else fall back to stats.nextPost
 	const upcomingPosts: PostSummaryDto[] =
-		queuedPostsData?.items && queuedPostsData.items.length > 0
-			? queuedPostsData.items
+		upcomingScheduled && upcomingScheduled.length > 0
+			? upcomingScheduled
 			: stats.nextPost
 				? [stats.nextPost]
 				: [];
@@ -171,10 +179,10 @@ function DashboardTiles({ stats }: { stats: DashboardStatsDto }) {
 			color: "text-accent",
 		},
 		{
-			label: "Published",
-			value: stats.memes.archived, // Archived or published posts
-			sub: "Completed memes",
-			href: "/calendar",
+			label: "Archived",
+			value: stats.memes.archived,
+			sub: "Archived memes",
+			href: "/memes?status=archived",
 			icon: Calendar,
 			color: "text-muted",
 		},
@@ -404,8 +412,12 @@ function AiSpendCard({
 	aiSpend: DashboardStatsDto["aiSpend"];
 	usage: Array<{ day: string; costUsd: number; calls: number }>;
 }) {
-	const budget = aiSpend.dailyBudgetUsd || 3;
-	const pct = Math.min(Math.round((aiSpend.todayUsd / budget) * 100), 100);
+	// A budget of 0 is valid (AI jobs are blocked), so no fallback value.
+	const budget = aiSpend.dailyBudgetUsd;
+	const pct =
+		budget > 0
+			? Math.min(Math.round((aiSpend.todayUsd / budget) * 100), 100)
+			: 100;
 
 	// Aggregate usage by day for SVG bar chart
 	const dayMap = new Map<string, number>();

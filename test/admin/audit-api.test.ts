@@ -141,10 +141,9 @@ describeWithDb("audit API", () => {
 		let cursor: string | null = null;
 		for (let guard = 0; guard < 5; guard++) {
 			const res = await GET(
-				apiRequest(
-					`/api/audit?limit=2${cursor ? `&cursor=${cursor}` : ""}`,
-					{ user: TEST_USER },
-				),
+				apiRequest(`/api/audit?limit=2${cursor ? `&cursor=${cursor}` : ""}`, {
+					user: TEST_USER,
+				}),
 				routeParams({}),
 			);
 			const page: Paged<AuditEventDto> = await json(res);

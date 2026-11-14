@@ -13,11 +13,12 @@ import {
 	User as UserIcon,
 } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ErrorText, Loading } from "@/components/ui/feedback";
 import type { AuditEventDto } from "@/lib/api/types";
-import { useAuditEvents } from "@/lib/client/admin";
+import { useAuditEventPages } from "@/lib/client/admin";
 
 const COMMON_ACTION_FILTERS = [
 	{ label: "All actions", value: "" },
@@ -30,21 +31,31 @@ const COMMON_ACTION_FILTERS = [
 ];
 
 export function ActivityView() {
-	const [activeTab, setActiveTab] = useState<"all" | "deletions">("all");
-	const [actionFilter, setActionFilter] = useState("");
+	// The dashboard links here with ?action=<prefix>.
+	const initialAction = useSearchParams().get("action") ?? "";
+	const [activeTab, setActiveTab] = useState<"all" | "deletions">(
+		initialAction === "immich.delete" ? "deletions" : "all",
+	);
+	const [actionFilter, setActionFilter] = useState(
+		initialAction === "immich.delete" ? "" : initialAction,
+	);
 
 	// The query uses the tab or action filter
 	const queryAction =
 		activeTab === "deletions" ? "immich.delete" : actionFilter || undefined;
 
-	const { data, isLoading, isFetching, error, refetch } = useAuditEvents({
-		action: queryAction,
-		limit: 50,
-	});
+	const {
+		data,
+		isLoading,
+		isFetching,
+		isFetchingNextPage,
+		hasNextPage,
+		fetchNextPage,
+		error,
+		refetch,
+	} = useAuditEventPages({ action: queryAction, limit: 50 });
 
-	// Display items: fresh from query or accumulated
-	const currentItems = data?.items ?? [];
-	const hasMore = Boolean(data?.nextCursor);
+	const currentItems = data?.pages.flatMap((page) => page.items) ?? [];
 
 	return (
 		<div className="space-y-6 pb-12">
@@ -142,16 +153,15 @@ export function ActivityView() {
 			)}
 
 			{/* Pagination Footer */}
-			{hasMore && (
+			{hasNextPage && (
 				<div className="pt-4 text-center">
 					<Button
 						variant="secondary"
 						size="md"
-						onClick={() => {
-							// In a full infinite scroll this appends pages, or we can refresh with cursor
-						}}
+						disabled={isFetchingNextPage}
+						onClick={() => void fetchNextPage()}
 					>
-						Showing latest {currentItems.length} events
+						{isFetchingNextPage ? "Loading…" : "Load more"}
 					</Button>
 				</div>
 			)}
