@@ -47,7 +47,7 @@ Every component is built against this section. Change it here first.
 | Zitadel app | `memes`, OIDC web, code flow + PKCE, basic auth, redirect `https://memes.vidur.xyz/oauth2/callback`, userinfo in ID token |
 | AWS region | `eu-central-1` |
 | Bucket | `centerpoint-memes-media`: private, SSE-S3, owner-enforced, versioning on, noncurrent expiry 90 days, abort incomplete multipart after 1 day, CORS `PUT`/`GET`/`HEAD` from `https://memes.vidur.xyz` and `http://localhost:3000` exposing `ETag` |
-| IAM user | `centerpoint-memes`: `s3:GetObject`, `PutObject`, `DeleteObject`, `AbortMultipartUpload` on `media/*` and `ig/*`; `s3:ListBucket` |
+| IAM user | `centerpoint-memes`: `s3:GetObject`, `PutObject`, `DeleteObject`, `AbortMultipartUpload` on `media/*`, `ig/*` and `uploads/*`; `s3:ListBucket` |
 | OpenRouter key | `openrouter_api_key.memes_centerpoint` in `terraform/openrouter`, limit $40 monthly; output `memes_centerpoint_api_key` |
 | Immich | `https://immich.vidur.xyz/api`, an API key created by hand in Immich (Account settings → API keys) with permissions `asset.read`, `asset.view`, `asset.download`, `asset.delete` |
 | Instagram | Meta app created by hand (Instagram API with Instagram Login), redirect `https://memes.vidur.xyz/api/instagram/callback` |
@@ -58,7 +58,7 @@ Every component is built against this section. Change it here first.
 media/<memeId>/original.<ext>    # exact bytes from Immich or the upload (jpg|png|webp|gif|heic)
 media/<memeId>/display.webp      # longest edge 1600 px, EXIF stripped, orientation applied
 media/<memeId>/thumb.webp        # longest edge 400 px
-uploads/<uploadId>               # direct-upload staging, deleted after import
+uploads/<uploadId>               # direct-upload staging, deleted after import (abort/expire after 1 day)
 ig/<postId>/<position>.jpg       # Instagram rendition: sRGB JPEG q90, width 1080, ratio clamped to [4:5, 1.91:1] by padding
 ```
 
@@ -286,9 +286,9 @@ NetworkPolicy egress for both Deployments: DNS, `memes-pg` on 5432, and 443 to t
 
 ## Manual steps
 
-1. Create an Immich API key (permissions above) and add it: `sops clusters/centerpoint/memes-system/secrets/03-immich.secret.yaml`.
+1. Create an Immich API key (permissions above) and add it as described in `clusters/centerpoint/memes-system/README.md`.
 2. Switch the Instagram account to a Creator account. Create a Meta app with the "Instagram API with Instagram Login" product, add the redirect URI and yourself as an Instagram tester, then add the app id and secret to `04-instagram.secret.yaml`. Connect the account from `/settings`.
-3. Grant yourself `memes` and `memes-admin` in Zitadel.
+3. Verify the Git-managed `memes` and `memes-admin` grants for yourself in Zitadel.
 4. Before the first backfill, calibrate: run triage on 200 candidates, review them, then decide whether to turn on auto-accept.
 
 ## Open questions
