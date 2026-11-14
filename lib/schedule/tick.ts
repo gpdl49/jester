@@ -6,6 +6,9 @@ import { enqueue } from "@/lib/jobs/queue";
 import { getNextSlotInstants } from "@/lib/schedule/slots";
 import { getSetting } from "@/lib/settings";
 
+/** Posts scheduled further back than this are re-slotted, not published. */
+export const OVERDUE_RESLOT_MS = 2 * 60 * 60 * 1000;
+
 export type SchedulerTickResult = {
 	assigned: number;
 	enqueued: number;
@@ -36,6 +39,18 @@ export async function runSchedulerTick(
 	if (paused) {
 		return { assigned: 0, enqueued: 0, paused: true };
 	}
+
+	// (0) Overdue backlog: after a pause or outage, posts scheduled long ago
+	// would all publish in one burst. Send them back to the slot pool; queue
+	// order (queuePosition, createdAt) is untouched. A publish-now post has
+	// scheduledAt = its click time, so it is never this old.
+	await db().post.updateMany({
+		where: {
+			status: "queued",
+			scheduledAt: { lt: new Date(now.getTime() - OVERDUE_RESLOT_MS) },
+		},
+		data: { scheduledAt: null, slotId: null },
+	});
 
 	// (a) Slot assignment
 	let assignedCount = 0;

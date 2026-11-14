@@ -5,6 +5,7 @@ import {
 	ApiError,
 	conflict,
 	errorResponse,
+	featureDisabled,
 	notFound,
 	toErrorBody,
 } from "@/lib/http/errors";
@@ -59,6 +60,14 @@ describe("errorResponse", () => {
 			error: "conflict",
 			message: "Taken",
 		});
+	});
+
+	it("does not log an expected 503 feature_disabled", () => {
+		const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const response = errorResponse(featureDisabled("AI"));
+		expect(response.status).toBe(503);
+		expect(spy).not.toHaveBeenCalled();
+		spy.mockRestore();
 	});
 
 	it("logs 500s", () => {

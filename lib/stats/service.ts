@@ -47,6 +47,7 @@ export async function getDashboardStats(
 		triageGroups,
 		memeGroups,
 		queuedPosts,
+		publishedPosts,
 		nextPostRow,
 		todaySpend,
 		monthSpend,
@@ -63,6 +64,9 @@ export async function getDashboardStats(
 		}),
 		db().post.count({
 			where: { status: "queued" },
+		}),
+		db().post.count({
+			where: { status: "published" },
 		}),
 		db().post.findFirst({
 			where: {
@@ -120,6 +124,7 @@ export async function getDashboardStats(
 		triage: triageCounts,
 		memes: memeCounts,
 		queuedPosts,
+		publishedPosts,
 		nextPost,
 		aiSpend: {
 			todayUsd: todaySpend,

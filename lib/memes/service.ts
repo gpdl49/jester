@@ -20,7 +20,7 @@ import {
 } from "@/lib/http/errors";
 import { analysisMeme } from "@/lib/jobs/definitions/analysis-meme";
 import { enqueue } from "@/lib/jobs/queue";
-import { deleteObjects, memeKey } from "@/lib/s3";
+import { deleteObjects, instagramKey, memeKey } from "@/lib/s3";
 import { presentMemeDetail, presentMemeSummary } from "./present";
 import type {
 	MemeBulkInput,
@@ -826,13 +826,60 @@ export async function deleteMeme(id: string, user: Viewer): Promise<void> {
 		);
 	}
 
+	const affectedRenditions: string[] = [];
 	// Database first: if the transaction fails nothing is lost. The bucket is
 	// versioned, so a failed S3 cleanup afterwards only leaves removable
 	// orphans, never a meme row whose image is gone.
 	await db().$transaction(async (tx) => {
 		// Clean up post items in draft, failed or cancelled posts (the foreign key
 		// is onDelete: Restrict)
+		const removed = await tx.postItem.findMany({
+			where: { memeId: id },
+			select: { postId: true, post: { select: { status: true } } },
+		});
 		await tx.postItem.deleteMany({ where: { memeId: id } });
+		for (const { postId, post } of removed) {
+			const remaining = await tx.postItem.findMany({
+				where: { postId },
+				orderBy: { position: "asc" },
+				select: { position: true },
+			});
+			// Positions were 0..n-1; close the gap in ascending order so the
+			// (postId, position) key never collides.
+			for (const [index, item] of remaining.entries()) {
+				if (item.position !== index) {
+					await tx.postItem.update({
+						where: {
+							postId_position: { postId, position: item.position },
+						},
+						data: { position: index },
+					});
+				}
+			}
+			const oldCount = remaining.length + 1;
+			affectedRenditions.push(
+				...Array.from({ length: oldCount }, (_, i) => instagramKey(postId, i)),
+			);
+			if (remaining.length === 0) {
+				// An empty post can never publish.
+				if (post.status !== "cancelled") {
+					await tx.post.update({
+						where: { id: postId },
+						data: {
+							status: "cancelled",
+							queuePosition: null,
+							scheduledAt: null,
+							slotId: null,
+						},
+					});
+				}
+			} else {
+				await tx.post.update({
+					where: { id: postId },
+					data: { kind: remaining.length > 1 ? "carousel" : "image" },
+				});
+			}
+		}
 		await tx.meme.delete({ where: { id } });
 		await audit(
 			{
@@ -851,6 +898,8 @@ export async function deleteMeme(id: string, user: Viewer): Promise<void> {
 			memeKey(meme.id, "original", meme.contentType),
 			memeKey(meme.id, "display"),
 			memeKey(meme.id, "thumb"),
+			// Cached Instagram renditions of the posts whose items changed.
+			...affectedRenditions,
 		]);
 	} catch (err) {
 		// The meme is already gone; report success and leave the orphans to the

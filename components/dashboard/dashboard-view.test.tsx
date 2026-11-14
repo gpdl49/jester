@@ -24,6 +24,7 @@ const mockStats: DashboardStatsDto = {
 		archived: 25,
 	},
 	queuedPosts: 4,
+	publishedPosts: 31,
 	nextPost: {
 		id: "post-123",
 		accountId: null,
@@ -95,7 +96,12 @@ describe("DashboardView component", () => {
 		expect(screen.getByText("14")).toBeInTheDocument(); // Approved
 		expect(screen.getByText("4")).toBeInTheDocument(); // Queued
 		expect(screen.getByText("Archived")).toBeInTheDocument();
-		expect(screen.queryByText("Published")).not.toBeInTheDocument();
+		expect(screen.getByText("Published")).toBeInTheDocument();
+		expect(screen.getByText("31")).toBeInTheDocument(); // Published
+		expect(screen.getByText("Published").closest("a")).toHaveAttribute(
+			"href",
+			"/queue",
+		);
 		expect(screen.getByText("25")).toBeInTheDocument(); // Archived
 
 		// 2. Feature chips

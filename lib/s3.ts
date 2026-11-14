@@ -177,16 +177,26 @@ export async function putObject(
 	);
 }
 
-/** Deletes up to 1000 keys per request; missing keys are not an error. */
+/** Deletes up to 1000 keys per request; missing keys are not an error; throws when any key fails. */
 export async function deleteObjects(keys: string[]): Promise<void> {
 	for (let i = 0; i < keys.length; i += 1000) {
 		const batch = keys.slice(i, i + 1000);
-		await s3().send(
+		const response = await s3().send(
 			new DeleteObjectsCommand({
 				Bucket: bucket(),
 				Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
 			}),
 		);
+		// Quiet mode only reports failures; a 200 can still carry per-key errors.
+		const failed = response.Errors ?? [];
+		if (failed.length > 0) {
+			const detail = failed
+				.map((e) => `${e.Key ?? "?"} (${e.Code ?? "unknown"})`)
+				.join(", ");
+			throw new Error(
+				`Failed to delete ${failed.length} of ${batch.length} objects: ${detail}`,
+			);
+		}
 	}
 }
 

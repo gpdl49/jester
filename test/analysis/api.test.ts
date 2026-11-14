@@ -57,6 +57,18 @@ describeWithDb("POST /api/memes/[id]/analyses", () => {
 		expect(body.error).toBe("not_found");
 	});
 
+	it("returns 404 for an unknown meme even when AI is not configured", async () => {
+		delete process.env.OPENROUTER_API_KEY;
+		resetEnvCache();
+		const id = "00000000-0000-0000-0000-000000000000";
+		const req = apiRequest(`/api/memes/${id}/analyses`, {
+			method: "POST",
+			body: { kind: "meme" },
+		});
+		const res = await POST(req, routeParams({ id }));
+		expect(res.status).toBe(404);
+	});
+
 	it("returns 503 when OpenRouter is not configured", async () => {
 		delete process.env.OPENROUTER_API_KEY;
 		resetEnvCache();

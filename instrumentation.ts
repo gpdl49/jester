@@ -16,7 +16,9 @@ export async function register() {
 	try {
 		await startWorker();
 	} catch (err) {
-		// The web app still serves; jobs stay queued until a restart.
-		console.error("[jobs] worker failed to start", err);
+		// A worker pod without a worker is useless but would still pass the
+		// health check: exit so Kubernetes restarts it.
+		console.error("[jobs] worker failed to start, exiting", err);
+		process.exit(1);
 	}
 }
