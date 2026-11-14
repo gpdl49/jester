@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { BudgetExceededError, nextBudgetReset } from "@/lib/ai";
+import { runAttribution } from "@/lib/attribution/find";
+import { defineJob } from "@/lib/jobs/define";
+import { enqueue } from "@/lib/jobs/queue";
 
 /**
  * `attribution.find` (docs/memes.md "Jobs"). Owned by the `attribution` slice: replace the
@@ -10,7 +13,17 @@ export const attributionFind = defineJob({
 	schema: z.object({ memeId: z.uuid(), analysisId: z.uuid().optional() }),
 	concurrency: 2,
 	queue: { retryLimit: 0 },
-	handler: async (_data) => {
-		throw new PermanentJobError("attribution.find: not implemented");
+	handler: async (data) => {
+		try {
+			await runAttribution(data.memeId, data.analysisId);
+		} catch (err) {
+			if (err instanceof BudgetExceededError) {
+				await enqueue(attributionFind, data, {
+					startAfter: nextBudgetReset(),
+				});
+				return;
+			}
+			throw err;
+		}
 	},
 });
