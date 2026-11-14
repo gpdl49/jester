@@ -210,7 +210,8 @@ describe("createImmichClient", () => {
 		});
 
 		const result = await client.downloadOriginal("asset-stream");
-		expect(capturedInit?.signal).toBeUndefined();
+		// Not the fixed 30 s request timeout: only the inactivity abort signal.
+		expect(capturedInit?.signal?.aborted).toBe(false);
 		expect(result.contentType).toBe("image/png");
 		expect(result.size).toBe(fileBytes.byteLength);
 		expect(result.body).toBeDefined();
@@ -219,6 +220,74 @@ describe("createImmichClient", () => {
 		const reader = result.body.getReader();
 		const chunk = await reader.read();
 		expect(new TextDecoder().decode(chunk.value)).toBe("binary content");
+	});
+
+	it("downloadOriginal errors the stream when no bytes arrive for the idle timeout", async () => {
+		const stubFetch = (async () =>
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(ctrl) {
+						ctrl.enqueue(new TextEncoder().encode("first"));
+						// then stalls forever
+					},
+				}),
+				{ status: 200 },
+			)) as typeof fetch;
+		const client = createImmichClient({
+			url: API_URL,
+			apiKey: API_KEY,
+			fetch: stubFetch,
+			downloadIdleTimeoutMs: 50,
+		});
+
+		const { body } = await client.downloadOriginal("stalled");
+		const reader = body.getReader();
+		expect(new TextDecoder().decode((await reader.read()).value)).toBe("first");
+		await expect(reader.read()).rejects.toThrow(/stalled/);
+	});
+
+	it("downloadOriginal rejects when the response headers never arrive", async () => {
+		const stubFetch = ((_u: RequestInfo | URL, init?: RequestInit) =>
+			new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener("abort", () =>
+					reject(init.signal?.reason ?? new Error("aborted")),
+				);
+			})) as typeof fetch;
+		const client = createImmichClient({
+			url: API_URL,
+			apiKey: API_KEY,
+			fetch: stubFetch,
+			downloadIdleTimeoutMs: 50,
+		});
+
+		await expect(client.downloadOriginal("no-headers")).rejects.toThrow(
+			/stalled/,
+		);
+	});
+
+	it("downloadOriginal does not time out while chunks keep arriving slowly", async () => {
+		let i = 0;
+		const stubFetch = (async () =>
+			new Response(
+				new ReadableStream<Uint8Array>({
+					async pull(ctrl) {
+						await new Promise((r) => setTimeout(r, 30));
+						if (i++ < 4) ctrl.enqueue(new Uint8Array([i]));
+						else ctrl.close();
+					},
+				}),
+				{ status: 200 },
+			)) as typeof fetch;
+		const client = createImmichClient({
+			url: API_URL,
+			apiKey: API_KEY,
+			fetch: stubFetch,
+			downloadIdleTimeoutMs: 100,
+		});
+
+		const { body } = await client.downloadOriginal("slow");
+		const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+		expect([...bytes]).toEqual([1, 2, 3, 4]);
 	});
 
 	it("getThumbnail queries size parameter and returns bytes and content type", async () => {
