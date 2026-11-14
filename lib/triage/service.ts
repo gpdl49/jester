@@ -203,6 +203,22 @@ export async function acceptAbove(
 	return { accepted };
 }
 
+/** True while an import.immich job for the asset is being executed by a worker. */
+async function importRunning(immichAssetId: string): Promise<boolean> {
+	try {
+		const rows = await db().$queryRaw<{ id: string }[]>`
+			SELECT id FROM pgboss.job
+			WHERE name = ${importImmich.name}
+				AND state = 'active'
+				AND data->>'immichAssetId' = ${immichAssetId}
+			LIMIT 1`;
+		return rows.length > 0;
+	} catch {
+		// No job tables yet (jobs never started): nothing can be running.
+		return false;
+	}
+}
+
 export async function resetAsset(
 	id: string,
 	actorId: string,
@@ -220,11 +236,19 @@ export async function resetAsset(
 		throw conflict("Asset has already been imported");
 	}
 
+	// An accepted asset whose import job is running right now would race this
+	// reset (the import claims the asset in its last step).
+	if (asset.triageStatus === "accepted" && (await importRunning(id))) {
+		throw conflict("An import of this asset is in progress; try again shortly");
+	}
+
 	const targetStatus: TriageStatus =
 		asset.memeProbability !== null ? "scored" : "pending";
 
-	const updated = await db().immichAsset.update({
-		where: { id },
+	// Conditional on the status we looked at: if the import (or anything else)
+	// moved the asset in the meantime, refuse instead of overwriting it.
+	const { count } = await db().immichAsset.updateMany({
+		where: { id, triageStatus: asset.triageStatus, memeId: null },
 		data: {
 			triageStatus: targetStatus,
 			decidedById: null,
@@ -232,6 +256,10 @@ export async function resetAsset(
 			error: null,
 		},
 	});
+	if (count === 0) {
+		throw conflict("Asset changed while resetting; reload and try again");
+	}
+	const updated = await db().immichAsset.findUniqueOrThrow({ where: { id } });
 
 	if (targetStatus === "pending") {
 		await enqueue(triageClassify, { immichAssetId: id });

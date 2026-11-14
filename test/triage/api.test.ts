@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { GET as getPreview } from "@/app/api/triage/[id]/preview/route";
 import { POST as resetTriage } from "@/app/api/triage/[id]/reset/route";
 import { POST as acceptAbove } from "@/app/api/triage/accept-above/route";
@@ -6,6 +6,8 @@ import { POST as postDecisions } from "@/app/api/triage/decisions/route";
 import { GET as getTriage } from "@/app/api/triage/route";
 import type { Paged, TriageCandidateDto } from "@/lib/api/types";
 import { db } from "@/lib/db";
+import { importImmich } from "@/lib/jobs/definitions/import-immich";
+import { enqueue, stopBoss } from "@/lib/jobs/queue";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
 import { createImmichAsset, createMeme } from "@/test/helpers/factories";
 import { apiRequest, json, routeParams, TEST_USER } from "@/test/helpers/http";
@@ -290,6 +292,51 @@ describeWithDb("Triage API routes", () => {
 	});
 
 	describe("POST /api/triage/[id]/reset", () => {
+		afterAll(async () => {
+			await stopBoss();
+		});
+
+		const reset = (id: string) =>
+			resetTriage(
+				apiRequest(`/api/triage/${id}/reset`, {
+					method: "POST",
+					user: ADMIN_USER,
+				}),
+				routeParams({ id }),
+			);
+
+		it("returns 409 and changes nothing while the asset's import job is running", async () => {
+			const asset = await createImmichAsset({
+				triageStatus: "accepted",
+				memeProbability: 0.9,
+			});
+			await enqueue(importImmich, { immichAssetId: asset.id });
+			await db().$executeRaw`
+				UPDATE pgboss.job SET state = 'active'
+				WHERE name = 'import.immich' AND data->>'immichAssetId' = ${asset.id}`;
+
+			const res = await reset(asset.id);
+
+			expect(res.status).toBe(409);
+			expect(
+				(await db().immichAsset.findUniqueOrThrow({ where: { id: asset.id } }))
+					.triageStatus,
+			).toBe("accepted");
+		});
+
+		it("still resets an accepted asset whose import job is only queued", async () => {
+			const asset = await createImmichAsset({
+				triageStatus: "accepted",
+				memeProbability: 0.9,
+			});
+			await enqueue(importImmich, { immichAssetId: asset.id });
+
+			const res = await reset(asset.id);
+
+			expect(res.status).toBe(200);
+			expect((await json<TriageCandidateDto>(res)).triageStatus).toBe("scored");
+		});
+
 		it("requires admin (403 for non-admin)", async () => {
 			const asset = await createImmichAsset({ triageStatus: "rejected" });
 			const res = await resetTriage(

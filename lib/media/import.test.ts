@@ -212,6 +212,121 @@ describeWithDb("media import", () => {
 		});
 	});
 
+	describe("importFromImmich when the asset is reset mid-import", () => {
+		/** An Immich whose download takes long enough for an admin to reset the asset. */
+		async function resetWhileDownloading(
+			bytes: Uint8Array,
+			assetId: string,
+			immichId: string,
+		) {
+			const checksum = createHash("sha1").update(bytes).digest("base64");
+			const fake = installFakeImmich([
+				fakeAsset({ id: immichId, bytes, checksum }),
+			]);
+			const download = fake.client.downloadOriginal.bind(fake.client);
+			fake.client.downloadOriginal = async (id) => {
+				const result = await download(id);
+				await db().immichAsset.update({
+					where: { id: assetId },
+					data: { triageStatus: "scored", decidedAt: null },
+				});
+				return result;
+			};
+			return { fake, checksum };
+		}
+
+		it("rolls back the meme and its S3 object and does not queue the deletion", async () => {
+			const bytes = await pngImage(64, 64);
+			const asset = await createImmichAsset({
+				triageStatus: "accepted",
+				checksum: createHash("sha1").update(bytes).digest("base64"),
+				mimeType: "image/png",
+				memeProbability: 0.9,
+			});
+			const { fake } = await resetWhileDownloading(
+				bytes,
+				asset.id,
+				asset.immichId,
+			);
+
+			await expect(importFromImmich(asset.id)).rejects.toThrow(
+				PermanentJobError,
+			);
+
+			const after = await db().immichAsset.findUniqueOrThrow({
+				where: { id: asset.id },
+			});
+			expect(after.triageStatus).toBe("scored");
+			expect(after.memeId).toBeNull();
+			expect(await db().meme.count()).toBe(0);
+			expect(fakeS3.objects.size).toBe(0);
+			expect(enqueuedJobs).toEqual([]);
+			expect(fake.deleted).toEqual([]);
+		});
+
+		it("does not link or queue the deletion when the original already exists as a meme", async () => {
+			const bytes = await pngImage(48, 48);
+			const sha256Hex = createHash("sha256").update(bytes).digest("hex");
+			const existing = await createMeme({
+				sha256: sha256Hex,
+				size: bytes.byteLength,
+			});
+			const key = storeOriginal(fakeS3, existing, bytes);
+			const other = await createImmichAsset({
+				triageStatus: "imported",
+				memeId: existing.id,
+			});
+			const asset = await createImmichAsset({
+				triageStatus: "accepted",
+				checksum: createHash("sha1").update(bytes).digest("base64"),
+			});
+			await resetWhileDownloading(bytes, asset.id, asset.immichId);
+
+			await expect(importFromImmich(asset.id)).rejects.toThrow(
+				PermanentJobError,
+			);
+
+			const after = await db().immichAsset.findUniqueOrThrow({
+				where: { id: asset.id },
+			});
+			expect(after.triageStatus).toBe("scored");
+			expect(after.memeId).toBeNull();
+			expect(await db().immichDeletion.count()).toBe(0);
+			expect(enqueuedJobs).toEqual([]);
+			// The existing meme and its original are untouched.
+			expect(
+				await db().meme.findUnique({ where: { id: existing.id } }),
+			).not.toBeNull();
+			expect(fakeS3.objects.has(key)).toBe(true);
+			expect(
+				(await db().immichAsset.findUniqueOrThrow({ where: { id: other.id } }))
+					.memeId,
+			).toBe(existing.id);
+		});
+
+		it("marks an over-size asset as error so the sweep does not retry it forever", async () => {
+			const asset = await createImmichAsset({ triageStatus: "accepted" });
+			const fake = installFakeImmich([
+				fakeAsset({ id: asset.immichId, checksum: asset.checksum }),
+			]);
+			const download = fake.client.downloadOriginal.bind(fake.client);
+			fake.client.downloadOriginal = async (id) => ({
+				...(await download(id)),
+				size: 101 * 1024 * 1024,
+			});
+
+			await expect(importFromImmich(asset.id)).rejects.toThrow(
+				PermanentJobError,
+			);
+
+			const after = await db().immichAsset.findUniqueOrThrow({
+				where: { id: asset.id },
+			});
+			expect(after.triageStatus).toBe("error");
+			expect(after.error).toContain("100 MiB");
+		});
+	});
+
 	describe("importFromUpload", () => {
 		it("fails if upload is not complete", async () => {
 			const uId = await userId();
