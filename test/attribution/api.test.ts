@@ -6,6 +6,7 @@ import type { MemeDetailDto } from "@/lib/api/types";
 import { requestAttribution } from "@/lib/attribution/request";
 import { db } from "@/lib/db";
 import { resetEnvCache } from "@/lib/env";
+import { getMemeDetail } from "@/lib/memes/service";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
 import { createMeme } from "@/test/helpers/factories";
 import { apiRequest, json, routeParams } from "@/test/helpers/http";
@@ -98,6 +99,65 @@ describeWithDb("Attribution API routes and service", () => {
 			});
 			expect(auditEvent).toBeTruthy();
 			expect(typeof auditEvent?.actorId).toBe("string");
+		});
+
+		it("returns exactly the DTO that GET /memes/{id} serves", async () => {
+			const meme = await createMeme();
+			const candidate = await db().attributionCandidate.create({
+				data: {
+					memeId: meme.id,
+					handle: "same_shape",
+					platform: "tumblr",
+					evidence: "ev",
+					confidence: 0.7,
+					rank: 1,
+				},
+			});
+			const res = await confirmPost(
+				apiRequest(
+					`/api/memes/${meme.id}/attribution/${candidate.id}/confirm`,
+					{
+						method: "POST",
+					},
+				),
+				routeParams({ id: meme.id, candidateId: candidate.id }),
+			);
+			const body = await json<MemeDetailDto>(res);
+			expect(body).toEqual(await getMemeDetail(meme.id));
+			expect(body.candidates[0]).toEqual(body.attribution);
+		});
+
+		it("two concurrent confirms leave exactly one candidate confirmed", async () => {
+			const meme = await createMeme();
+			const make = (handle: string, rank: number) =>
+				db().attributionCandidate.create({
+					data: {
+						memeId: meme.id,
+						handle,
+						platform: "x",
+						evidence: "ev",
+						confidence: 0.5,
+						rank,
+					},
+				});
+			const a = await make("one", 1);
+			const b = await make("two", 2);
+			await Promise.all(
+				[a, b].map((c) =>
+					confirmPost(
+						apiRequest(`/api/memes/${meme.id}/attribution/${c.id}/confirm`, {
+							method: "POST",
+						}),
+						routeParams({ id: meme.id, candidateId: c.id }),
+					),
+				),
+			);
+			const confirmed = await db().attributionCandidate.findMany({
+				where: { memeId: meme.id, confirmedAt: { not: null } },
+			});
+			const after = await db().meme.findUnique({ where: { id: meme.id } });
+			expect(confirmed).toHaveLength(1);
+			expect(after?.attributionId).toBe(confirmed[0]?.id);
 		});
 
 		it("confirming another candidate replaces the first", async () => {

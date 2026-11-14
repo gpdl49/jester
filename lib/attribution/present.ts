@@ -1,27 +1,25 @@
-import type { AnalysisDto } from "@/lib/api/types";
+import type { AttributionCandidateDto } from "@/lib/api/types";
+import type { AttributionCandidate } from "@/lib/generated/prisma/client";
 
-export function presentAnalysis(row: {
-	id: string;
-	memeId: string | null;
-	kind: string;
-	model: string | null;
-	status: string;
-	result: unknown;
-	error: string | null;
-	costUsd: number | null;
-	createdAt: Date;
-	updatedAt: Date;
-}): AnalysisDto {
+/**
+ * The one presenter for AttributionCandidateDto: the meme detail
+ * (lib/memes/present.ts) reuses it, so every endpoint returns the same shape.
+ */
+export function presentAttributionCandidate(
+	candidate: AttributionCandidate,
+): AttributionCandidateDto {
 	return {
-		id: row.id,
-		memeId: row.memeId,
-		kind: row.kind as AnalysisDto["kind"],
-		model: row.model,
-		status: row.status as AnalysisDto["status"],
-		result: row.result,
-		error: row.error,
-		costUsd: row.costUsd,
-		createdAt: row.createdAt.toISOString(),
-		updatedAt: row.updatedAt.toISOString(),
+		id: candidate.id,
+		memeId: candidate.memeId,
+		creatorName: candidate.creatorName,
+		handle: candidate.handle,
+		platform: candidate.platform,
+		url: candidate.url,
+		evidence: candidate.evidence,
+		confidence: candidate.confidence,
+		rank: candidate.rank,
+		confirmedAt: candidate.confirmedAt?.toISOString() ?? null,
+		rejectedAt: candidate.rejectedAt?.toISOString() ?? null,
+		createdAt: candidate.createdAt.toISOString(),
 	};
 }

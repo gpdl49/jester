@@ -15,6 +15,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { AttributionPanel } from "@/components/attribution/attribution-panel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { EmptyState, Loading } from "@/components/ui/feedback";
@@ -27,14 +28,21 @@ import {
 	useMeme,
 	usePatchMeme,
 } from "@/lib/client/memes";
-import { AttributionSlot } from "./attribution-slot";
 
 export function MemeDetail({ id }: { id: string }) {
 	const router = useRouter();
 	const { data: meme, isLoading, error } = useMeme(id);
-	const { mutate: patch, isPending: isPatching } = usePatchMeme();
+	const {
+		mutate: patch,
+		isPending: isPatching,
+		error: patchError,
+	} = usePatchMeme();
 	const { mutate: deleteThisMeme, isPending: isDeleting } = useDeleteMeme();
-	const { mutate: runBulk, isPending: isAnalyzing } = useBulkMemes();
+	const {
+		mutate: runBulk,
+		isPending: isAnalyzing,
+		error: analyzeError,
+	} = useBulkMemes();
 
 	// Local state for editable fields
 	const [description, setDescription] = useState("");
@@ -63,10 +71,13 @@ export function MemeDetail({ id }: { id: string }) {
 	useEffect(() => {
 		if (!meme) return;
 		const handleKeyDown = (e: KeyboardEvent) => {
+			// Never hijack browser shortcuts (Cmd/Ctrl+R reloads, Cmd/Ctrl+A selects)
+			if (e.metaKey || e.ctrlKey || e.altKey) return;
 			const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
 			if (
 				tag === "input" ||
 				tag === "textarea" ||
+				tag === "select" ||
 				(e.target as HTMLElement)?.isContentEditable
 			) {
 				return;
@@ -132,6 +143,13 @@ export function MemeDetail({ id }: { id: string }) {
 			value = template.trim() || null;
 		}
 
+		const current = meme[field];
+		const unchanged = Array.isArray(value)
+			? Array.isArray(current) &&
+				value.length === current.length &&
+				value.every((v, i) => v === current[i])
+			: (value ?? null) === (current ?? null);
+		if (unchanged) return; // blur without an edit must not mark the field user-edited
 		patch({ id: meme.id, patch: { [field]: value } });
 	};
 
@@ -276,6 +294,15 @@ export function MemeDetail({ id }: { id: string }) {
 					</Button>
 				</div>
 			</div>
+
+			{(patchError || analyzeError) && (
+				<div
+					role="alert"
+					className="mb-4 rounded-lg bg-danger-soft p-3 text-sm text-danger"
+				>
+					{(patchError ?? analyzeError)?.message}
+				</div>
+			)}
 
 			{postError && (
 				<div className="mb-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">
@@ -466,8 +493,8 @@ export function MemeDetail({ id }: { id: string }) {
 
 				{/* Right Column: Metadata, Tags, AI Fields, Sensitivity */}
 				<div className="lg:col-span-5 flex flex-col gap-6">
-					{/* Attribution Slot */}
-					<AttributionSlot meme={meme} />
+					{/* Attribution */}
+					<AttributionPanel meme={meme} />
 
 					{/* Tags Section */}
 					<div className="rounded-xl border border-line bg-surface p-4 shadow-xs">
@@ -485,14 +512,16 @@ export function MemeDetail({ id }: { id: string }) {
 								>
 									#{tag.name}
 									<span className="text-[10px] opacity-60">({tag.source})</span>
-									<button
-										type="button"
-										onClick={() => handleRemoveTag(tag.name)}
-										className="ml-0.5 text-muted hover:text-fg"
-										aria-label={`Remove tag ${tag.name}`}
-									>
-										<X className="size-3" />
-									</button>
+									{tag.source === "user" && (
+										<button
+											type="button"
+											onClick={() => handleRemoveTag(tag.name)}
+											className="ml-0.5 text-muted hover:text-fg"
+											aria-label={`Remove tag ${tag.name}`}
+										>
+											<X className="size-3" />
+										</button>
+									)}
 								</span>
 							))}
 						</div>

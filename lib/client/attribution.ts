@@ -21,7 +21,7 @@ export const attributionApi = {
 			`/memes/${api.enc(memeId)}/attribution/${api.enc(candidateId)}/reject`,
 		),
 
-	updateCreditText: (memeId: string, creditText: string) =>
+	updateCreditText: (memeId: string, creditText: string | null) =>
 		api.patch<MemeDetailDto>(`/memes/${api.enc(memeId)}`, {
 			creditText,
 		}),
@@ -82,7 +82,7 @@ export function useUpdateCreditText() {
 			creditText,
 		}: {
 			memeId: string;
-			creditText: string;
+			creditText: string | null;
 		}) => attributionApi.updateCreditText(memeId, creditText),
 		onSuccess: (data) => {
 			queryClient.setQueryData(queryKeys.meme(data.id), data);
