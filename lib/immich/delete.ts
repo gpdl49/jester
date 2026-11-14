@@ -72,9 +72,41 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 					},
 				});
 
+	// skipped / failed outcomes are audited too, so the Activity page's
+	// "Immich deletions" tab (audit action immich.delete) shows every outcome.
+	const recordAndAudit = (
+		status: "skipped" | "failed",
+		data: {
+			memeId: string | null;
+			verifiedSha256?: string | null;
+			error?: string;
+		},
+	) =>
+		db().$transaction(async (tx) => {
+			await record(status, data, tx);
+			await audit(
+				{
+					actorId: null,
+					action: "immich.delete",
+					subjectType: "immich_asset",
+					subjectId: asset.id,
+					data: {
+						immichId: asset.immichId,
+						memeId: data.memeId,
+						status,
+						...(data.error ? { error: data.error } : {}),
+						...(data.verifiedSha256
+							? { verifiedSha256: data.verifiedSha256 }
+							: {}),
+					},
+				},
+				tx,
+			);
+		});
+
 	if (!meme) {
 		const errorMsg = `No associated meme for asset ${immichAssetId}`;
-		await record("failed", { memeId: null, error: errorMsg });
+		await recordAndAudit("failed", { memeId: null, error: errorMsg });
 		throw new PermanentJobError(errorMsg);
 	}
 
@@ -103,7 +135,7 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 			errorMsg += "downloaded bytes do not match the linked meme";
 		}
 
-		await record("failed", {
+		await recordAndAudit("failed", {
 			memeId: meme.id,
 			verifiedSha256: head?.sha256 ?? null,
 			error: errorMsg,
@@ -114,7 +146,10 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 	// Honor feature switch and pause setting
 	const deletePaused = await getSetting("immich.deletePaused");
 	if (!features().immichDelete || deletePaused) {
-		await record("skipped", { memeId: meme.id, verifiedSha256: head.sha256 });
+		await recordAndAudit("skipped", {
+			memeId: meme.id,
+			verifiedSha256: head.sha256,
+		});
 		return;
 	}
 
@@ -138,6 +173,7 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 				data: {
 					immichId: asset.immichId,
 					memeId: meme.id,
+					status: "done",
 					verifiedSha256: head.sha256,
 				},
 			},

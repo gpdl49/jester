@@ -92,6 +92,7 @@ describeWithDb("runDelete", () => {
 		});
 		expect(auditEvents).toHaveLength(1);
 		expect(auditEvents[0]?.subjectType).toBe("immich_asset");
+		expect(auditEvents[0]?.data).toMatchObject({ status: "done" });
 	});
 
 	it("refuses deletion when original S3 object is missing", async () => {
@@ -113,6 +114,27 @@ describeWithDb("runDelete", () => {
 		expect(deletions).toHaveLength(1);
 		expect(deletions[0]?.status).toBe("failed");
 		expect(deletions[0]?.error).toContain("missing");
+
+		const events = await db().auditEvent.findMany({
+			where: { action: "immich.delete", subjectId: asset.id },
+		});
+		expect(events).toHaveLength(1);
+		expect(events[0]?.data).toMatchObject({
+			status: "failed",
+			immichId: asset.immichId,
+		});
+	});
+
+	it("audits a failed deletion for an asset with no meme", async () => {
+		const asset = await createImmichAsset({ triageStatus: "imported" });
+
+		await expect(runDelete(asset.id)).rejects.toThrow(PermanentJobError);
+
+		const events = await db().auditEvent.findMany({
+			where: { action: "immich.delete", subjectId: asset.id },
+		});
+		expect(events).toHaveLength(1);
+		expect(events[0]?.data).toMatchObject({ status: "failed" });
 	});
 
 	it("refuses deletion when S3 object size does not match meme size", async () => {
@@ -170,6 +192,12 @@ describeWithDb("runDelete", () => {
 		});
 		expect(deletions).toHaveLength(1);
 		expect(deletions[0]?.status).toBe("skipped");
+
+		const events = await db().auditEvent.findMany({
+			where: { action: "immich.delete", subjectId: asset.id },
+		});
+		expect(events).toHaveLength(1);
+		expect(events[0]?.data).toMatchObject({ status: "skipped" });
 	});
 
 	it("records skipped and does not delete when immich.deletePaused setting is true", async () => {
