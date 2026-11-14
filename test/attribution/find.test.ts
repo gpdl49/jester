@@ -42,6 +42,56 @@ describe("postProcessCandidates unit logic", () => {
 		expect(result[0]?.rank).toBe(1);
 	});
 
+	it("drops reposters named by subdomain host, URL path or credited name", () => {
+		const base = {
+			platform: "web" as const,
+			evidence: "ev",
+			confidence: 0.9,
+		};
+		const result = postProcessCandidates([
+			{
+				...base,
+				creatorName: "x",
+				handle: null,
+				url: "https://www.9gag.com/gag/1",
+			},
+			{
+				...base,
+				creatorName: "y",
+				handle: null,
+				url: "https://m.ifunny.co/p/2",
+			},
+			{
+				...base,
+				creatorName: "z",
+				handle: null,
+				url: "https://www.instagram.com/pubity/",
+			},
+			{ ...base, creatorName: "9GAG", handle: null, url: null },
+			{
+				...base,
+				creatorName: "Real Artist",
+				handle: null,
+				url: "https://example.com/a",
+			},
+		]);
+		expect(result.map((r) => r.creatorName)).toEqual(["Real Artist"]);
+	});
+
+	it("drops candidates with no name, handle or url", () => {
+		const result = postProcessCandidates([
+			{
+				creatorName: " ",
+				handle: null,
+				platform: "web",
+				url: null,
+				evidence: "nothing to go on",
+				confidence: 0.4,
+			},
+		]);
+		expect(result).toEqual([]);
+	});
+
 	it("drops candidates whose url is not https", () => {
 		const result = postProcessCandidates([
 			{
@@ -280,5 +330,90 @@ describeWithDb("runAttribution database integration", () => {
 		expect(analysis?.costUsd).toBe(0.015);
 		const result = analysis?.result as { citations?: string[] };
 		expect(result?.citations).toEqual(["https://instagram.com/sarahscribbles"]);
+	});
+
+	it("a re-run keeps confirmed and rejected candidates, never re-offers them, and ranks fresh ones first", async () => {
+		const meme = await createMeme({});
+		const confirmed = await db().attributionCandidate.create({
+			data: {
+				memeId: meme.id,
+				handle: "kept_artist",
+				platform: "instagram",
+				evidence: "confirmed earlier",
+				confidence: 0.9,
+				rank: 1,
+				confirmedAt: new Date(),
+			},
+		});
+		await db().meme.update({
+			where: { id: meme.id },
+			data: {
+				attributionId: confirmed.id,
+				creditText: "@kept_artist on Instagram",
+			},
+		});
+		await db().attributionCandidate.create({
+			data: {
+				memeId: meme.id,
+				handle: "Nope_Guy",
+				platform: "x",
+				evidence: "rejected earlier",
+				confidence: 0.3,
+				rank: 2,
+				rejectedAt: new Date(),
+			},
+		});
+
+		const candidate = (
+			handle: string,
+			platform: string,
+			confidence: number,
+		) => ({
+			creatorName: null,
+			handle,
+			platform,
+			url: `https://example.com/${handle}`,
+			evidence: "ev",
+			confidence,
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					model: "m",
+					choices: [
+						{
+							message: {
+								content: JSON.stringify({
+									candidates: [
+										candidate("KEPT_ARTIST", "instagram", 0.99),
+										candidate("nope_guy", "x", 0.95),
+										candidate("brand_new", "tiktok", 0.7),
+									],
+								}),
+							},
+						},
+					],
+					usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.01 },
+				}),
+			),
+		);
+
+		await runAttribution(meme.id);
+
+		const rows = await db().attributionCandidate.findMany({
+			where: { memeId: meme.id },
+			orderBy: { rank: "asc" },
+		});
+		expect(rows.map((r) => r.handle)).toEqual([
+			"brand_new",
+			"kept_artist",
+			"Nope_Guy",
+		]);
+		expect(rows.map((r) => r.rank)).toEqual([1, 2, 3]);
+		// the confirmed pick and the credit survive untouched
+		const after = await db().meme.findUnique({ where: { id: meme.id } });
+		expect(after?.attributionId).toBe(confirmed.id);
+		expect(after?.creditText).toBe("@kept_artist on Instagram");
 	});
 });

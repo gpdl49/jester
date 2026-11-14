@@ -19,6 +19,16 @@ import {
 } from "./clues";
 import { getReverseImageSearchProvider } from "./reverse-image";
 
+/** True when the host (any subdomain of it) or the first path segment is an aggregator. */
+function urlPointsAtReposter(url: URL): boolean {
+	const labels = url.hostname.toLowerCase().split(".");
+	if (labels.some((label) => isReposter(label))) {
+		return true;
+	}
+	const first = url.pathname.split("/").filter(Boolean)[0];
+	return Boolean(first && isReposter(decodeURIComponent(first)));
+}
+
 export const attributionCandidateJsonSchema = {
 	type: "object",
 	properties: {
@@ -126,8 +136,12 @@ export function postProcessCandidates(
 			? normalizeHandle(candidate.handle)
 			: null;
 
-		// Drop candidate whose handle is a known reposter
+		// Drop candidate whose handle or credited name is a known reposter
 		if (cleanHandle && isReposter(cleanHandle)) {
+			continue;
+		}
+		const cleanName = candidate.creatorName?.trim() || null;
+		if (cleanName && isReposter(cleanName)) {
 			continue;
 		}
 
@@ -139,12 +153,17 @@ export function postProcessCandidates(
 			}
 			try {
 				const parsed = new URL(url);
-				if (isReposter(parsed.hostname)) {
+				if (urlPointsAtReposter(parsed)) {
 					continue;
 				}
 			} catch {
 				continue;
 			}
+		}
+
+		// Nothing to credit or follow up: not a candidate
+		if (!cleanName && !cleanHandle && !url) {
+			continue;
 		}
 
 		// Cap confidence at 0.5 when there is no url
@@ -156,7 +175,7 @@ export function postProcessCandidates(
 		const evidence = (candidate.evidence || "").slice(0, 400);
 
 		valid.push({
-			creatorName: candidate.creatorName?.trim() || null,
+			creatorName: cleanName,
 			handle: cleanHandle || null,
 			platform: candidate.platform,
 			url,
@@ -359,7 +378,8 @@ export async function runAttribution(
 
 		// 9. Store candidates and update analysis in transaction
 		await db().$transaction(async (tx) => {
-			// Delete earlier unconfirmed, unrejected candidates
+			// Delete earlier unconfirmed, unrejected candidates; confirmed and
+			// rejected ones are decisions the user made and stay.
 			await tx.attributionCandidate.deleteMany({
 				where: {
 					memeId: meme.id,
@@ -368,9 +388,35 @@ export async function runAttribution(
 				},
 			});
 
-			if (candidates.length > 0) {
+			const kept = await tx.attributionCandidate.findMany({
+				where: { memeId: meme.id },
+				select: { id: true, handle: true, platform: true, url: true },
+				orderBy: { rank: "asc" },
+			});
+			const sameAsKept = (c: PostProcessedCandidate) =>
+				kept.some(
+					(k) =>
+						(c.url && k.url && c.url === k.url) ||
+						(c.handle &&
+							k.handle &&
+							c.platform === k.platform &&
+							c.handle.toLowerCase() === k.handle.toLowerCase()),
+				);
+			// A creator the user already confirmed or rejected is not offered again.
+			const fresh = candidates
+				.filter((c) => !sameAsKept(c))
+				.map((c, i) => ({ ...c, rank: i + 1 }));
+			// Decided candidates sort after the fresh ones, in their old order.
+			for (const [i, k] of kept.entries()) {
+				await tx.attributionCandidate.update({
+					where: { id: k.id },
+					data: { rank: fresh.length + i + 1 },
+				});
+			}
+
+			if (fresh.length > 0) {
 				await tx.attributionCandidate.createMany({
-					data: candidates.map((c) => ({
+					data: fresh.map((c) => ({
 						memeId: meme.id,
 						analysisId: analysis.id,
 						creatorName: c.creatorName,
@@ -391,7 +437,7 @@ export async function runAttribution(
 					model: response.model,
 					costUsd: response.usage?.cost ?? 0,
 					result: {
-						candidates,
+						candidates: fresh,
 						citations: response.citations ?? [],
 					},
 				},
