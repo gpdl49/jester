@@ -45,10 +45,17 @@ function buildRenderedText(
 	credit: string,
 	hashtags: string,
 ): string {
-	const replaced = template
-		.replace("{caption}", caption)
-		.replace("{credit}", credit)
-		.replace("{hashtags}", hashtags);
+	// One pass with function replacers: user text may contain `$&`-style
+	// patterns or placeholder-looking text that must stay literal.
+	const values: Record<string, string> = {
+		caption,
+		credit,
+		hashtags,
+	};
+	const replaced = template.replace(
+		/\{(caption|credit|hashtags)\}/g,
+		(_m, key: string) => values[key] ?? "",
+	);
 
 	// Collapse 3+ newlines to 2 and trim.
 	return replaced.replace(/\n{3,}/g, "\n\n").trim();
