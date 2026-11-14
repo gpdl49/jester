@@ -174,7 +174,7 @@ Duplicates: an import whose SHA-256 equals an existing meme's (or whose dHash is
 ```
 GET    /healthz                                  -> "ok"
 GET    /me                                       -> {id, sub, email, username, groups[], isAdmin}
-GET    /stats                                    -> DashboardStats (counts per triage status and meme status, queue length, next post, AI spend today/month, last sync)
+GET    /stats                                    -> DashboardStats (counts per triage status and meme status, queue length, published posts, next post, AI spend today/month, last sync)
 
 GET    /triage?status=scored&minProbability=&cursor=&limit=  -> {items: TriageCandidate[], nextCursor}  (default sort memeProbability desc)
 POST   /triage/decisions                          {decisions: {immichAssetId, decision: "accept"|"reject"}[]} -> {accepted, rejected}  (max 200)
