@@ -1,14 +1,13 @@
 import type { Metadata } from "next";
-import { PageHeader, Placeholder } from "@/components/page-header";
+import { MemeDetail } from "@/components/memes/meme-detail";
 
-export const metadata: Metadata = { title: "Meme" };
+export const metadata: Metadata = { title: "Meme Detail" };
 
-/** Owned by the `library` slice (docs/memes.md "Pages"). */
-export default function Page() {
-	return (
-		<>
-			<PageHeader title="Meme" />
-			<Placeholder>Not built yet.</Placeholder>
-		</>
-	);
+export default async function Page({
+	params,
+}: {
+	params: Promise<{ id: string }>;
+}) {
+	const { id } = await params;
+	return <MemeDetail id={id} />;
 }
