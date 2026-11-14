@@ -3,7 +3,7 @@ import type { MemeDetailDto } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { db } from "@/lib/db";
 import { notFound } from "@/lib/http/errors";
-import { getMemeDetail } from "./detail";
+import { getMemeDetail } from "@/lib/memes/service";
 import { formatCreditText } from "./format";
 
 /**
@@ -40,10 +40,17 @@ export async function confirmAttribution(
 	const now = new Date();
 
 	await db().$transaction(async (tx) => {
+		// Serialise confirms for this meme: without the row lock two concurrent
+		// confirms both read "nothing confirmed" and leave two candidates confirmed.
+		await tx.$queryRaw`SELECT id FROM memes WHERE id = ${meme.id}::uuid FOR UPDATE`;
+		const current = await tx.meme.findUnique({
+			where: { id: meme.id },
+			select: { attributionId: true },
+		});
 		// If another candidate was confirmed, unconfirm it
-		if (meme.attributionId && meme.attributionId !== candidate.id) {
+		if (current?.attributionId && current.attributionId !== candidate.id) {
 			await tx.attributionCandidate.update({
-				where: { id: meme.attributionId },
+				where: { id: current.attributionId },
 				data: {
 					confirmedById: null,
 					confirmedAt: null,
@@ -124,6 +131,12 @@ export async function rejectAttribution(
 	const now = new Date();
 
 	await db().$transaction(async (tx) => {
+		await tx.$queryRaw`SELECT id FROM memes WHERE id = ${meme.id}::uuid FOR UPDATE`;
+		const current = await tx.meme.findUnique({
+			where: { id: meme.id },
+			select: { attributionId: true },
+		});
+		const wasConfirmed = current?.attributionId === candidate.id;
 		await tx.attributionCandidate.update({
 			where: { id: candidate.id },
 			data: {
@@ -134,7 +147,7 @@ export async function rejectAttribution(
 		});
 
 		// If this was the confirmed attribution, clear it
-		if (meme.attributionId === candidate.id) {
+		if (wasConfirmed) {
 			await tx.meme.update({
 				where: { id: meme.id },
 				data: {
@@ -152,7 +165,7 @@ export async function rejectAttribution(
 				subjectId: meme.id,
 				data: {
 					candidateId: candidate.id,
-					clearedActiveAttribution: meme.attributionId === candidate.id,
+					clearedActiveAttribution: wasConfirmed,
 				},
 			},
 			tx,

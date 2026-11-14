@@ -1,6 +1,5 @@
+import { presentAnalysis } from "@/lib/analysis/present";
 import type {
-	AnalysisDto,
-	AttributionCandidateDto,
 	MemeDetailDto,
 	MemeSummaryDto,
 	PostSummaryDto,
@@ -9,6 +8,7 @@ import type {
 	TagDto,
 	UserRefDto,
 } from "@/lib/api/types";
+import { presentAttributionCandidate } from "@/lib/attribution/present";
 import type {
 	Analysis,
 	AttributionCandidate,
@@ -39,40 +39,6 @@ export type MemeDetailWithRelations = Meme & {
 	})[];
 	approvedUser?: UserRefDto | null;
 };
-
-export function presentAnalysis(analysis: Analysis): AnalysisDto {
-	return {
-		id: analysis.id,
-		memeId: analysis.memeId,
-		kind: analysis.kind,
-		model: analysis.model,
-		status: analysis.status,
-		result: analysis.result,
-		error: analysis.error,
-		costUsd: analysis.costUsd,
-		createdAt: analysis.createdAt.toISOString(),
-		updatedAt: analysis.updatedAt.toISOString(),
-	};
-}
-
-export function presentAttributionCandidate(
-	candidate: AttributionCandidate,
-): AttributionCandidateDto {
-	return {
-		id: candidate.id,
-		memeId: candidate.memeId,
-		creatorName: candidate.creatorName,
-		handle: candidate.handle,
-		platform: candidate.platform,
-		url: candidate.url,
-		evidence: candidate.evidence,
-		confidence: candidate.confidence,
-		rank: candidate.rank,
-		confirmedAt: candidate.confirmedAt?.toISOString() ?? null,
-		rejectedAt: candidate.rejectedAt?.toISOString() ?? null,
-		createdAt: candidate.createdAt.toISOString(),
-	};
-}
 
 export function presentPostSummary(
 	post: Post & { items?: { memeId: string; position: number }[] },

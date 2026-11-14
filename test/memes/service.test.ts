@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Viewer } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { resetEnvCache } from "@/lib/env";
 import {
 	bulkMemes,
 	deleteMeme,
@@ -245,6 +246,106 @@ describeWithDb("memes service", () => {
 			expect(noMatch.items).toHaveLength(0);
 		});
 
+		it("search matches stemmed description words and unstemmed template/OCR words", async () => {
+			const m1 = await createMeme({
+				template: "doge",
+				description: "two cats sitting on a mat",
+			});
+			const m2 = await createMeme({ ocrText: "cats rule everything" });
+			const _m3 = await createMeme({ description: "a dog barking" });
+
+			// "cats" is stored as the lexeme "cat" in the english-stemmed description
+			// but as "cats" in the simple-parsed OCR text: both must be found.
+			const res = await listMemes({ q: "cats", sort: "relevance", limit: 60 });
+			expect(res.items.map((i) => i.id).sort()).toEqual([m1.id, m2.id].sort());
+			const sit = await listMemes({ q: "sits", sort: "newest", limit: 60 });
+			expect(sit.items.map((i) => i.id)).toEqual([m1.id]);
+		});
+
+		it("search treats hostile and malformed input as plain text", async () => {
+			const m1 = await createMeme({ description: "harmless" });
+			const inputs = [
+				"'; DROP TABLE memes; --",
+				'"unterminated',
+				"((((",
+				"- - -",
+				"a & | ! b",
+				"\\",
+				"%00",
+			];
+			for (const q of inputs) {
+				const res = await listMemes({ q, sort: "relevance", limit: 60 });
+				expect(res.items).toEqual([]);
+			}
+			// the table is still there and untouched
+			expect(await db().meme.count({ where: { id: m1.id } })).toBe(1);
+		});
+
+		it("relevance pagination walks every match exactly once", async () => {
+			const ids: string[] = [];
+			for (let i = 0; i < 7; i++) {
+				ids.push((await createMeme({ template: `banana ${i}` })).id);
+			}
+			const seen: string[] = [];
+			let cursor: string | undefined;
+			for (let page = 0; page < 5; page++) {
+				const res = await listMemes({
+					q: "banana",
+					sort: "relevance",
+					limit: 3,
+					cursor,
+				});
+				seen.push(...res.items.map((i) => i.id));
+				if (!res.nextCursor) break;
+				cursor = res.nextCursor;
+			}
+			expect(seen.sort()).toEqual([...ids].sort());
+		});
+
+		it("every sort pages through nulls and ties without repeating or skipping", async () => {
+			const rows = [
+				{ postability: 90, rating: 5 },
+				{ postability: 90, rating: null },
+				{ postability: null, rating: 3 },
+				{ postability: 10, rating: 3 },
+				{ postability: null, rating: null },
+				{ postability: 50, rating: 1 },
+			];
+			const ids: string[] = [];
+			for (const r of rows) ids.push((await createMeme(r)).id);
+			for (const sort of [
+				"newest",
+				"oldest",
+				"postability",
+				"takenAt",
+				"rating",
+			] as const) {
+				const seen: string[] = [];
+				let cursor: string | undefined;
+				for (let page = 0; page < 10; page++) {
+					const res = await listMemes({ sort, limit: 2, cursor });
+					seen.push(...res.items.map((i) => i.id));
+					if (!res.nextCursor) break;
+					cursor = res.nextCursor;
+				}
+				expect(seen.length, sort).toBe(ids.length);
+				expect(new Set(seen).size, sort).toBe(ids.length);
+			}
+		});
+
+		it("sensitive=false also keeps memes whose flags are partly missing", async () => {
+			const partial = await createMeme({ sensitivity: { nsfw: false } });
+			const flagged = await createMeme({ sensitivity: { politics: true } });
+			const res = await listMemes({
+				sensitive: false,
+				limit: 60,
+				sort: "newest",
+			});
+			const ids = res.items.map((i) => i.id);
+			expect(ids).toContain(partial.id);
+			expect(ids).not.toContain(flagged.id);
+		});
+
 		it("cursor pagination is stable under ties", async () => {
 			const fixedDate = new Date("2026-11-14T10:00:00.000Z");
 			const memes = [];
@@ -383,6 +484,55 @@ describeWithDb("memes service", () => {
 			expect(auditLog?.actorId).toBe(testViewer.id);
 		});
 
+		it("saving an unchanged AI field does not mark it user-edited", async () => {
+			const meme = await createMeme({
+				description: "same",
+				hashtags: ["a", "b"],
+				template: null,
+			});
+			const updated = await patchMeme(
+				meme.id,
+				{ description: "same", hashtags: ["a", "b"], template: null },
+				testViewer,
+			);
+			expect(updated.userEdited).toEqual([]);
+
+			const changed = await patchMeme(
+				meme.id,
+				{ hashtags: ["a", "c"] },
+				testViewer,
+			);
+			expect(changed.userEdited).toEqual(["hashtags"]);
+		});
+
+		it("approving an already-approved meme keeps the original approver", async () => {
+			const approvedAt = new Date("2026-01-01T00:00:00Z");
+			const meme = await createMeme({
+				status: "approved",
+				approvedById: adminViewer.id,
+				approvedAt,
+			});
+			const updated = await patchMeme(
+				meme.id,
+				{ status: "approved" },
+				testViewer,
+			);
+			expect(updated.approvedBy?.id).toBe(adminViewer.id);
+			expect(updated.approvedAt).toBe(approvedAt.toISOString());
+			expect(
+				await db().auditEvent.count({ where: { action: "meme.approve" } }),
+			).toBe(0);
+		});
+
+		it("answers 404 (not 500) for a malformed id", async () => {
+			await expect(getMemeDetail("not-a-uuid")).rejects.toMatchObject({
+				status: 404,
+			});
+			await expect(
+				patchMeme("not-a-uuid", { rating: 1 }, testViewer),
+			).rejects.toMatchObject({ status: 404 });
+		});
+
 		it("rejects self-duplicate with 422", async () => {
 			const meme = await createMeme({});
 			await expect(
@@ -465,6 +615,8 @@ describeWithDb("memes service", () => {
 		});
 
 		it("bulk analyze skips memes with analysis already queued or running", async () => {
+			process.env.OPENROUTER_API_KEY = "sk-or-test";
+			resetEnvCache();
 			const m1 = await createMeme({});
 			const m2 = await createMeme({});
 			await db().analysis.create({
@@ -481,6 +633,66 @@ describeWithDb("memes service", () => {
 			);
 			// Only m2 is eligible
 			expect(res.updated).toBe(1);
+			// ...and gets a queued Analysis row the UI can show
+			const rows = await db().analysis.findMany({
+				where: { memeId: m2.id, kind: "meme" },
+			});
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.status).toBe("queued");
+			delete process.env.OPENROUTER_API_KEY;
+			resetEnvCache();
+		});
+
+		it("bulk analyze answers 503 when AI is not configured", async () => {
+			delete process.env.OPENROUTER_API_KEY;
+			resetEnvCache();
+			const m1 = await createMeme({});
+			await expect(
+				bulkMemes({ ids: [m1.id], action: "analyze" }, testViewer),
+			).rejects.toMatchObject({ status: 503 });
+		});
+
+		it("bulk actions ignore unknown ids instead of failing or auditing them", async () => {
+			const m1 = await createMeme({ status: "inbox" });
+			const ghost = "00000000-0000-0000-0000-00000000dead";
+
+			const tagged = await bulkMemes(
+				{ ids: [m1.id, ghost], action: "tag", tag: "x" },
+				testViewer,
+			);
+			expect(tagged.updated).toBe(1);
+
+			const approved = await bulkMemes(
+				{ ids: [m1.id, ghost], action: "approve" },
+				testViewer,
+			);
+			expect(approved.updated).toBe(1);
+			const audits = await db().auditEvent.findMany({
+				where: { action: "meme.approve" },
+			});
+			expect(audits.map((a) => a.subjectId)).toEqual([m1.id]);
+		});
+
+		it("bulk approve leaves already-approved memes (and their approver) alone", async () => {
+			const approvedAt = new Date("2026-01-01T00:00:00Z");
+			const done = await createMeme({
+				status: "approved",
+				approvedById: adminViewer.id,
+				approvedAt,
+			});
+			const fresh = await createMeme({ status: "inbox" });
+
+			const res = await bulkMemes(
+				{ ids: [done.id, fresh.id], action: "approve" },
+				testViewer,
+			);
+			expect(res.updated).toBe(1);
+			const after = await db().meme.findUnique({ where: { id: done.id } });
+			expect(after?.approvedById).toBe(adminViewer.id);
+			expect(after?.approvedAt).toEqual(approvedAt);
+			expect(
+				await db().auditEvent.count({ where: { action: "meme.approve" } }),
+			).toBe(1);
 		});
 	});
 
@@ -499,6 +711,26 @@ describeWithDb("memes service", () => {
 			await expect(deleteMeme(meme.id, adminViewer)).rejects.toMatchObject({
 				status: 409,
 			});
+		});
+
+		it("refuses 409 for a publishing post and leaves the S3 objects alone", async () => {
+			const fakeS3 = installFakeS3();
+			try {
+				const meme = await createMeme({ contentType: "image/png" });
+				fakeS3.upload(
+					`media/${meme.id}/thumb.webp`,
+					new Uint8Array([1]),
+					"image/webp",
+				);
+				await createPost([meme.id], { status: "publishing" });
+				await expect(deleteMeme(meme.id, adminViewer)).rejects.toMatchObject({
+					status: 409,
+				});
+				expect(fakeS3.objects.get(`media/${meme.id}/thumb.webp`)).toBeDefined();
+				expect(await db().meme.count({ where: { id: meme.id } })).toBe(1);
+			} finally {
+				fakeS3.restore();
+			}
 		});
 
 		it("deletes S3 objects and row and writes audit event", async () => {

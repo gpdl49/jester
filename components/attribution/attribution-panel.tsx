@@ -110,7 +110,8 @@ export function AttributionPanel({
 		e.preventDefault();
 		updateCreditMutation.mutate({
 			memeId: meme.id,
-			creditText: creditInput,
+			// Clearing the field clears the credit (null), not "📸 " with nothing after it
+			creditText: creditInput.trim() || null,
 		});
 	};
 
@@ -150,6 +151,25 @@ export function AttributionPanel({
 					)}
 				</Button>
 			</div>
+
+			{(requestMutation.error ||
+				confirmMutation.error ||
+				rejectMutation.error ||
+				updateCreditMutation.error) && (
+				<div
+					role="alert"
+					className="rounded-lg bg-danger-soft p-3 text-danger text-sm"
+				>
+					{
+						(
+							requestMutation.error ??
+							confirmMutation.error ??
+							rejectMutation.error ??
+							updateCreditMutation.error
+						)?.message
+					}
+				</div>
+			)}
 
 			{/* Running indicator */}
 			{isSearching && (
@@ -252,7 +272,7 @@ export function AttributionPanel({
 
 							{/* Link and action buttons */}
 							<div className="mt-1 flex items-center justify-between gap-2 border-t border-line/60 pt-2">
-								{candidate.url ? (
+								{candidate.url && /^https:\/\//i.test(candidate.url) ? (
 									<a
 										href={candidate.url}
 										target="_blank"

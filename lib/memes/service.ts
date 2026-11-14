@@ -1,3 +1,4 @@
+import { assertAiAvailable } from "@/lib/ai";
 import type {
 	MemeDetailDto,
 	MemeSummaryDto,
@@ -9,7 +10,8 @@ import { audit } from "@/lib/audit";
 import type { Viewer } from "@/lib/auth";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { Prisma } from "@/lib/generated/prisma/client";
+import { env } from "@/lib/env";
+import type { Prisma } from "@/lib/generated/prisma/client";
 import {
 	badRequest,
 	conflict,
@@ -33,6 +35,16 @@ const AI_FIELDS = [
 	"hashtags",
 	"template",
 ] as const;
+
+const UUID_RE =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A malformed id can never exist; answer 404 instead of letting Postgres 500 on the uuid cast. */
+function assertMemeId(id: string): void {
+	if (!UUID_RE.test(id)) {
+		throw notFound("Meme not found");
+	}
+}
 
 export function encodeCursor(sortVal: unknown, id: string): string {
 	return Buffer.from(JSON.stringify([sortVal, id])).toString("base64url");
@@ -61,6 +73,7 @@ export function decodeCursor(cursor: string): [unknown, string] | null {
  * Throws 404 if the meme is missing.
  */
 export async function getMemeDetail(id: string): Promise<MemeDetailDto> {
+	assertMemeId(id);
 	const meme = await db().meme.findUnique({
 		where: { id },
 		include: {
@@ -146,17 +159,17 @@ export async function listMemes(
 			{ sensitivity: { path: ["personalData"], equals: true } },
 		];
 	} else if (query.sensitive === false) {
-		where.OR = [
-			{ sensitivity: { equals: Prisma.DbNull } },
-			{
-				AND: [
-					{ NOT: { sensitivity: { path: ["nsfw"], equals: true } } },
-					{ NOT: { sensitivity: { path: ["politics"], equals: true } } },
-					{ NOT: { sensitivity: { path: ["slurs"], equals: true } } },
-					{ NOT: { sensitivity: { path: ["personalData"], equals: true } } },
-				],
-			},
-		];
+		// "No flag set" cannot be written with NOT(path = true): a missing key
+		// makes that comparison NULL and the row drops out. Ask Postgres for the
+		// flagged ids and exclude them instead.
+		const flagged = await db().$queryRaw<Array<{ id: string }>>`
+			SELECT id FROM memes
+			WHERE sensitivity->>'nsfw' = 'true'
+				OR sensitivity->>'politics' = 'true'
+				OR sensitivity->>'slurs' = 'true'
+				OR sensitivity->>'personalData' = 'true'
+		`;
+		where.AND = [{ id: { notIn: flagged.map((f) => f.id) } }];
 	}
 
 	// 6. hasAttribution filter
@@ -177,13 +190,21 @@ export async function listMemes(
 	let matchingRanks: Map<string, number> | null = null;
 	let rankedMatches: { id: string; rank: number }[] = [];
 	if (query.q) {
+		// The generated column stems description/alt_text with 'english' and
+		// leaves template/ocr_text unstemmed ('simple'), so the query has to be
+		// parsed both ways or "cats" never finds a description saying "cat".
+		// websearch_to_tsquery never raises on odd input; the term is a bound
+		// parameter, never interpolated.
 		const rawMatches = await db().$queryRaw<
 			Array<{ id: string; rank: number }>
 		>`
-			SELECT id, ts_rank("search", websearch_to_tsquery('simple', ${query.q})) AS rank
-			FROM memes
-			WHERE "search" @@ websearch_to_tsquery('simple', ${query.q})
-			ORDER BY rank DESC, id DESC
+			WITH q AS (
+				SELECT websearch_to_tsquery('simple', ${query.q}) || websearch_to_tsquery('english', ${query.q}) AS tsq
+			)
+			SELECT m.id, ts_rank(m."search", q.tsq) AS rank
+			FROM memes m, q
+			WHERE m."search" @@ q.tsq
+			ORDER BY rank DESC, m.id DESC
 		`;
 		if (rawMatches.length === 0) {
 			return { items: [], nextCursor: null };
@@ -415,6 +436,7 @@ export async function patchMeme(
 	input: MemePatchInput,
 	user: Viewer,
 ): Promise<MemeDetailDto> {
+	assertMemeId(id);
 	const meme = await db().meme.findUnique({
 		where: { id },
 		select: {
@@ -423,6 +445,11 @@ export async function patchMeme(
 			userEdited: true,
 			approvedById: true,
 			approvedAt: true,
+			description: true,
+			altText: true,
+			captionDraft: true,
+			hashtags: true,
+			template: true,
 		},
 	});
 
@@ -446,26 +473,33 @@ export async function patchMeme(
 		}
 	}
 
-	// 409: A rejected or archived meme that is in a queued or draft post
-	if (input.status === "rejected" || input.status === "archived") {
-		const inActivePost = await db().postItem.findFirst({
-			where: {
-				memeId: id,
-				post: { status: { in: ["draft", "queued"] } },
-			},
-		});
-		if (inActivePost) {
-			throw conflict("Cannot reject or archive a meme in an active post");
-		}
-	}
-
 	await db().$transaction(async (tx) => {
-		// Track user edited AI fields
+		// 409: a rejected or archived meme must not sit in a queued or draft post
+		if (input.status === "rejected" || input.status === "archived") {
+			const inActivePost = await tx.postItem.findFirst({
+				where: {
+					memeId: id,
+					post: { status: { in: ["draft", "queued", "publishing"] } },
+				},
+			});
+			if (inActivePost) {
+				throw conflict("Cannot reject or archive a meme in an active post");
+			}
+		}
+
+		// Track user-edited AI fields: only a real change counts, so tabbing
+		// through the form never freezes a field against re-analysis.
 		const userEdited = new Set(meme.userEdited);
 		for (const field of AI_FIELDS) {
-			if (input[field] !== undefined) {
-				userEdited.add(field);
-			}
+			const next = input[field];
+			if (next === undefined) continue;
+			const current = meme[field];
+			const same = Array.isArray(next)
+				? Array.isArray(current) &&
+					next.length === current.length &&
+					next.every((v, i) => v === current[i])
+				: next === current;
+			if (!same) userEdited.add(field);
 		}
 
 		// Tags update: replaces user tags and leaves AI tags alone
@@ -518,7 +552,7 @@ export async function patchMeme(
 		// Status transitions & auditing
 		let approvedById = meme.approvedById;
 		let approvedAt = meme.approvedAt;
-		if (input.status === "approved") {
+		if (input.status === "approved" && meme.status !== "approved") {
 			approvedById = user.id;
 			approvedAt = new Date();
 		}
@@ -579,7 +613,14 @@ export async function bulkMemes(
 	input: MemeBulkInput,
 	user: Viewer,
 ): Promise<{ updated: number }> {
-	const ids = input.ids;
+	// Unknown ids are ignored (they would otherwise fail foreign keys halfway
+	// through, or write audit rows for memes that do not exist).
+	const ids = (
+		await db().meme.findMany({
+			where: { id: { in: input.ids } },
+			select: { id: true },
+		})
+	).map((m) => m.id);
 	if (ids.length === 0) {
 		return { updated: 0 };
 	}
@@ -587,15 +628,23 @@ export async function bulkMemes(
 	switch (input.action) {
 		case "approve":
 			return db().$transaction(async (tx) => {
+				// Already-approved memes keep their original approver and time.
+				const targets = (
+					await tx.meme.findMany({
+						where: { id: { in: ids }, status: { not: "approved" } },
+						select: { id: true },
+					})
+				).map((m) => m.id);
+				if (targets.length === 0) return { updated: 0 };
 				const res = await tx.meme.updateMany({
-					where: { id: { in: ids } },
+					where: { id: { in: targets } },
 					data: {
 						status: "approved",
 						approvedById: user.id,
 						approvedAt: new Date(),
 					},
 				});
-				for (const id of ids) {
+				for (const id of targets) {
 					await audit(
 						{
 							actorId: user.id,
@@ -610,12 +659,13 @@ export async function bulkMemes(
 			});
 
 		case "reject":
-		case "archive":
+		case "archive": {
+			const targetStatus = input.action === "reject" ? "rejected" : "archived";
 			return db().$transaction(async (tx) => {
 				const inActivePost = await tx.postItem.findFirst({
 					where: {
 						memeId: { in: ids },
-						post: { status: { in: ["draft", "queued"] } },
+						post: { status: { in: ["draft", "queued", "publishing"] } },
 					},
 				});
 				if (inActivePost) {
@@ -623,15 +673,20 @@ export async function bulkMemes(
 						`Cannot ${input.action} memes that are in a draft or queued post`,
 					);
 				}
-				const targetStatus =
-					input.action === "reject" ? "rejected" : "archived";
+				const targets = (
+					await tx.meme.findMany({
+						where: { id: { in: ids }, status: { not: targetStatus } },
+						select: { id: true },
+					})
+				).map((m) => m.id);
+				if (targets.length === 0) return { updated: 0 };
 				const res = await tx.meme.updateMany({
-					where: { id: { in: ids } },
+					where: { id: { in: targets } },
 					data: { status: targetStatus },
 				});
 				const action =
 					input.action === "reject" ? "meme.reject" : "meme.archive";
-				for (const id of ids) {
+				for (const id of targets) {
 					await audit(
 						{
 							actorId: user.id,
@@ -644,6 +699,7 @@ export async function bulkMemes(
 				}
 				return { updated: res.count };
 			});
+		}
 
 		case "tag": {
 			if (!input.tag?.trim()) {
@@ -667,7 +723,7 @@ export async function bulkMemes(
 						data: toAdd.map((memeId) => ({
 							memeId,
 							tagId: tag.id,
-							source: "user",
+							source: "user" as const,
 						})),
 						skipDuplicates: true,
 					});
@@ -698,6 +754,10 @@ export async function bulkMemes(
 		}
 
 		case "analyze": {
+			// Same preconditions and rows as POST /memes/{id}/analyses: 503/429
+			// when AI is off or the budget is spent, and a queued Analysis the
+			// UI can show.
+			await assertAiAvailable();
 			const running = await db().analysis.findMany({
 				where: {
 					memeId: { in: ids },
@@ -709,12 +769,21 @@ export async function bulkMemes(
 			const busySet = new Set(running.map((r) => r.memeId).filter(Boolean));
 			const eligible = ids.filter((id) => !busySet.has(id));
 			for (const memeId of eligible) {
-				await enqueue(analysisMeme, { memeId });
+				const analysis = await db().analysis.create({
+					data: {
+						memeId,
+						kind: "meme",
+						status: "queued",
+						model: env().OPENROUTER_ANALYSIS_MODEL,
+					},
+				});
+				await enqueue(analysisMeme, { memeId, analysisId: analysis.id });
 			}
 			return { updated: eligible.length };
 		}
 
 		case "attribute": {
+			await assertAiAvailable();
 			const running = await db().analysis.findMany({
 				where: {
 					memeId: { in: ids },
@@ -735,6 +804,7 @@ export async function bulkMemes(
 
 export async function deleteMeme(id: string, user: Viewer): Promise<void> {
 	requireAdmin(user);
+	assertMemeId(id);
 
 	const meme = await db().meme.findUnique({
 		where: { id },
@@ -747,25 +817,21 @@ export async function deleteMeme(id: string, user: Viewer): Promise<void> {
 	const inPost = await db().postItem.findFirst({
 		where: {
 			memeId: id,
-			post: { status: { in: ["published", "queued"] } },
+			post: { status: { in: ["published", "queued", "publishing"] } },
 		},
 	});
 	if (inPost) {
 		throw conflict(
-			"Cannot delete a meme that is in a published or queued post",
+			"Cannot delete a meme that is in a published, queued or publishing post",
 		);
 	}
 
-	// Delete all three S3 variants
-	const keys = [
-		memeKey(meme.id, "original", meme.contentType),
-		memeKey(meme.id, "display"),
-		memeKey(meme.id, "thumb"),
-	];
-	await deleteObjects(keys);
-
+	// Database first: if the transaction fails nothing is lost. The bucket is
+	// versioned, so a failed S3 cleanup afterwards only leaves removable
+	// orphans, never a meme row whose image is gone.
 	await db().$transaction(async (tx) => {
-		// Clean up any post items in draft or cancelled posts to satisfy foreign key onDelete: Restrict
+		// Clean up post items in draft, failed or cancelled posts (the foreign key
+		// is onDelete: Restrict)
 		await tx.postItem.deleteMany({ where: { memeId: id } });
 		await tx.meme.delete({ where: { id } });
 		await audit(
@@ -779,4 +845,16 @@ export async function deleteMeme(id: string, user: Viewer): Promise<void> {
 			tx,
 		);
 	});
+
+	try {
+		await deleteObjects([
+			memeKey(meme.id, "original", meme.contentType),
+			memeKey(meme.id, "display"),
+			memeKey(meme.id, "thumb"),
+		]);
+	} catch (err) {
+		// The meme is already gone; report success and leave the orphans to the
+		// bucket lifecycle rather than a 500 for a delete that happened.
+		console.error(`meme ${id} deleted but S3 cleanup failed`, err);
+	}
 }

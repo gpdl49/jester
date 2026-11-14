@@ -1,5 +1,6 @@
 import "server-only";
 import { assertAiAvailable } from "@/lib/ai";
+import { presentAnalysis } from "@/lib/analysis/present";
 import type { AnalysisDto } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { db } from "@/lib/db";
@@ -7,7 +8,6 @@ import { env } from "@/lib/env";
 import { conflict, notFound } from "@/lib/http/errors";
 import { attributionFind } from "@/lib/jobs/definitions/attribution-find";
 import { enqueue } from "@/lib/jobs/queue";
-import { presentAnalysis } from "./present";
 
 /**
  * Creates a queued attribution analysis, enqueues the attribution.find job,
