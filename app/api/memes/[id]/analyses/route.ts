@@ -26,9 +26,6 @@ export const POST = withAuth<RouteParams<{ id: string }>>(
 		}
 		const body = postAnalysesSchema.parse(raw);
 
-		// 1. Assert AI availability (503 if disabled, 429 if budget exceeded)
-		await assertAiAvailable();
-
 		const { id: memeId } = await params;
 		const meme = await db().meme.findUnique({
 			where: { id: memeId },
@@ -36,6 +33,10 @@ export const POST = withAuth<RouteParams<{ id: string }>>(
 		if (!meme) {
 			throw notFound("Meme not found");
 		}
+
+		// Existence first, so a missing meme is a 404 even when AI is off or
+		// over budget (503 if disabled, 429 if budget exceeded).
+		await assertAiAvailable();
 
 		if (body.kind === "attribution") {
 			const result = await requestAttribution(memeId, user.id);
