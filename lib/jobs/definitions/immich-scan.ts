@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { runScan } from "@/lib/immich/sync";
+import { defineJob } from "@/lib/jobs/define";
 
 /**
  * `immich.scan` (docs/memes.md "Jobs"). Owned by the `immich` slice: replace the
@@ -15,7 +16,7 @@ export const immichScan = defineJob({
 		data: { mode: "incremental" },
 	},
 	queue: { retryLimit: 0, policy: "singleton" },
-	handler: async (_data) => {
-		throw new PermanentJobError("immich.scan: not implemented");
+	handler: async (data) => {
+		await runScan(data.mode);
 	},
 });
