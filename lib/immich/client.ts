@@ -10,6 +10,15 @@ import {
 } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** A download is aborted when no bytes arrive for this long. */
+const DEFAULT_DOWNLOAD_IDLE_MS = 60_000;
+
+/**
+ * `MetadataSearch` (frozen in types.ts) has no `takenAfter`; Immich accepts it
+ * on /search/metadata (filters on fileCreatedAt) and the client forwards the
+ * whole query object, so callers that need it type their query with this.
+ */
+export type MetadataSearchWithTaken = MetadataSearch & { takenAfter?: string };
 
 /**
  * The process-wide Immich client. Owned by the `immich` slice: replace
@@ -20,7 +29,11 @@ export function createImmichClient(config: {
 	url: string;
 	apiKey: string;
 	fetch?: typeof fetch;
+	/** Abort a download when no bytes arrive for this long (default 60 s). */
+	downloadIdleTimeoutMs?: number;
 }): ImmichClient {
+	const downloadIdleMs =
+		config.downloadIdleTimeoutMs ?? DEFAULT_DOWNLOAD_IDLE_MS;
 	const fetchFn = config.fetch ?? fetch;
 	const baseUrl = `${config.url.replace(/\/+$/, "")}/api`;
 
@@ -90,7 +103,7 @@ export function createImmichClient(config: {
 	}
 
 	return {
-		async searchMetadata(query: MetadataSearch): Promise<ImmichPage> {
+		async searchMetadata(query: MetadataSearchWithTaken): Promise<ImmichPage> {
 			const res = await request("/search/metadata", {
 				method: "POST",
 				headers: {
@@ -175,22 +188,85 @@ export function createImmichClient(config: {
 			contentType: string;
 			size: number | null;
 		}> {
-			const res = await request(
-				`/assets/${encodeURIComponent(id)}/original`,
-				{ method: "GET" },
-				{ timeoutMs: 0 },
-			);
+			// No overall timeout (originals can be large), but a stalled connection
+			// must not hang the job: abort when nothing arrives for downloadIdleMs,
+			// both while waiting for the response and between chunks.
+			const controller = new AbortController();
+			const stalled = () =>
+				new ImmichError(
+					`Immich download stalled: no data for ${downloadIdleMs} ms`,
+				);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let onStall: (() => void) | undefined;
+			const arm = () => {
+				clearTimeout(timer);
+				timer = setTimeout(() => {
+					controller.abort(stalled());
+					onStall?.();
+				}, downloadIdleMs);
+			};
+			const disarm = () => clearTimeout(timer);
+
+			let res: Response;
+			arm();
+			try {
+				res = await request(
+					`/assets/${encodeURIComponent(id)}/original`,
+					{ method: "GET", signal: controller.signal },
+					{ timeoutMs: 0 },
+				);
+			} catch (err) {
+				disarm();
+				throw controller.signal.aborted ? stalled() : err;
+			}
+			disarm();
 			if (!res.body) {
 				throw new ImmichError(
 					"Empty response body from Immich downloadOriginal",
 				);
 			}
+			const source = res.body.getReader();
+			const body = new ReadableStream<Uint8Array>({
+				async pull(ctrl) {
+					// The timer only runs while we wait on Immich, so a slow consumer
+					// (disk, S3) never trips it.
+					const stall = new Promise<never>((_, reject) => {
+						onStall = () => reject(stalled());
+					});
+					arm();
+					try {
+						const { done, value } = await Promise.race([source.read(), stall]);
+						if (done) {
+							ctrl.close();
+						} else {
+							ctrl.enqueue(value);
+						}
+					} catch (err) {
+						source.cancel().catch(() => {});
+						ctrl.error(
+							err instanceof ImmichError
+								? err
+								: new ImmichError(
+										err instanceof Error ? err.message : String(err),
+									),
+						);
+					} finally {
+						disarm();
+						onStall = undefined;
+					}
+				},
+				cancel(reason) {
+					disarm();
+					controller.abort();
+					return source.cancel(reason);
+				},
+			});
 			const contentType =
 				res.headers.get("content-type") || "application/octet-stream";
 			const lengthHeader = res.headers.get("content-length");
 			const size = lengthHeader ? parseInt(lengthHeader, 10) : null;
 			return {
-				body: res.body as ReadableStream<Uint8Array>,
+				body,
 				contentType,
 				size: Number.isNaN(size) ? null : size,
 			};

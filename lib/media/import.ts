@@ -56,6 +56,50 @@ async function ensureOriginalInS3(
 	return true;
 }
 
+/** Marks an asset that can never be imported, so nothing keeps re-queueing it. */
+async function markAssetUnimportable(
+	assetId: string,
+	message: string,
+): Promise<void> {
+	await db().immichAsset.updateMany({
+		where: { id: assetId, triageStatus: "accepted" },
+		data: { triageStatus: "error", error: message },
+	});
+}
+
+const resetDuringImport = (assetId: string) =>
+	new PermanentJobError(
+		`Immich asset ${assetId} is no longer accepted (reset or changed during the import); nothing was imported`,
+	);
+
+/**
+ * Undoes the Meme (and its S3 objects) an import created for an asset that was
+ * reset before the import could claim it. A meme something else has meanwhile
+ * linked to (another asset, an upload, a pending deletion) is kept.
+ */
+async function discardMeme(meme: {
+	id: string;
+	contentType: string;
+}): Promise<void> {
+	const removed = await db().$transaction(async (tx) => {
+		const [asset, upload, deletion] = await Promise.all([
+			tx.immichAsset.count({ where: { memeId: meme.id } }),
+			tx.upload.count({ where: { memeId: meme.id } }),
+			tx.immichDeletion.count({ where: { memeId: meme.id } }),
+		]);
+		if (asset + upload + deletion > 0) return false;
+		await tx.meme.delete({ where: { id: meme.id } });
+		return true;
+	});
+	if (removed) {
+		await deleteObjects([
+			memeKey(meme.id, "original", meme.contentType),
+			memeKey(meme.id, "display"),
+			memeKey(meme.id, "thumb"),
+		]);
+	}
+}
+
 const isHeic = (contentType: string) =>
 	contentType === "image/heic" || contentType === "image/heif";
 
@@ -122,6 +166,7 @@ export async function importFromImmich(
 		} = await immich().downloadOriginal(asset.immichId);
 		if (declaredSize != null && declaredSize > MAX_IMPORT_BYTES) {
 			await body.cancel().catch(() => {});
+			await markAssetUnimportable(asset.id, "Asset exceeds 100 MiB limit");
 			throw new PermanentJobError("Asset exceeds 100 MiB limit");
 		}
 		const writeStream = fs.createWriteStream(tmpPath);
@@ -147,6 +192,7 @@ export async function importFromImmich(
 				}
 				totalBytes += value.byteLength;
 				if (totalBytes > MAX_IMPORT_BYTES) {
+					await markAssetUnimportable(asset.id, "Asset exceeds 100 MiB limit");
 					throw new PermanentJobError("Asset exceeds 100 MiB limit");
 				}
 				sha1.update(value);
@@ -213,42 +259,52 @@ export async function importFromImmich(
 				});
 			}
 
+			if (repaired) {
+				await enqueue(mediaRenditions, { memeId: existingMeme.id });
+				await enqueue(analysisMeme, { memeId: existingMeme.id });
+			}
+
 			// ImmichAsset.memeId is unique: a meme that already has an asset cannot be
 			// linked again. Then a pending ImmichDeletion row carries the link and the
 			// SHA-256 of the bytes downloaded from this asset, for immich.delete.
 			const otherAsset = await db().immichAsset.findFirst({
 				where: { memeId: existingMeme.id, id: { not: asset.id } },
 			});
-			if (otherAsset) {
-				const hasPending = await db().immichDeletion.findFirst({
-					where: {
-						immichAssetId: asset.id,
-						status: "pending",
-						memeId: existingMeme.id,
+			// Final step: only claim the asset if it is still accepted (an admin
+			// reset may have happened while the download ran).
+			const claimed = await db().$transaction(async (tx) => {
+				const { count } = await tx.immichAsset.updateMany({
+					where: { id: asset.id, triageStatus: "accepted" },
+					data: {
+						triageStatus: "imported",
+						memeId: otherAsset ? undefined : existingMeme.id,
 					},
 				});
-				if (!hasPending) {
-					await db().immichDeletion.create({
-						data: {
+				if (count === 0) return false;
+				if (otherAsset) {
+					const hasPending = await tx.immichDeletion.findFirst({
+						where: {
 							immichAssetId: asset.id,
-							immichId: asset.immichId,
-							memeId: existingMeme.id,
 							status: "pending",
-							verifiedSha256: sha256Base64,
+							memeId: existingMeme.id,
 						},
 					});
+					if (!hasPending) {
+						await tx.immichDeletion.create({
+							data: {
+								immichAssetId: asset.id,
+								immichId: asset.immichId,
+								memeId: existingMeme.id,
+								status: "pending",
+								verifiedSha256: sha256Base64,
+							},
+						});
+					}
 				}
-			}
-			await db().immichAsset.update({
-				where: { id: asset.id },
-				data: {
-					triageStatus: "imported",
-					memeId: otherAsset ? undefined : existingMeme.id,
-				},
+				return true;
 			});
-			if (repaired) {
-				await enqueue(mediaRenditions, { memeId: existingMeme.id });
-				await enqueue(analysisMeme, { memeId: existingMeme.id });
+			if (!claimed) {
+				throw resetDuringImport(asset.id);
 			}
 			await enqueue(immichDelete, { immichAssetId: asset.id });
 			return { memeId: existingMeme.id };
@@ -292,13 +348,20 @@ export async function importFromImmich(
 			await generateRenditions(meme.id, { immichId: asset.immichId });
 		}
 
-		await db().immichAsset.update({
-			where: { id: asset.id },
-			data: {
-				triageStatus: "imported",
-				memeId: meme.id,
-			},
+		// Final step: only claim the asset if it is still accepted. An admin reset
+		// during the download must not be overwritten, and must not leave a meme
+		// behind or lead to the Immich original being deleted.
+		const claimed = await db().$transaction(async (tx) => {
+			const { count } = await tx.immichAsset.updateMany({
+				where: { id: asset.id, triageStatus: "accepted" },
+				data: { triageStatus: "imported", memeId: meme.id },
+			});
+			return count === 1;
 		});
+		if (!claimed) {
+			await discardMeme(meme);
+			throw resetDuringImport(asset.id);
+		}
 
 		await enqueue(mediaRenditions, { memeId: meme.id });
 		await enqueue(analysisMeme, { memeId: meme.id });

@@ -211,6 +211,41 @@ describeWithDb("uploads API", () => {
 			expect(resAgain.status).toBe(200);
 		});
 
+		it("enqueues import.upload once when several callers complete the same upload at once", async () => {
+			const createRes = await handleCreateUpload(
+				apiRequest("/api/uploads", {
+					method: "POST",
+					body: { contentType: "image/png", size: 4 },
+				}),
+				{},
+			);
+			const { upload } = await json<UploadCreatedDto>(createRes);
+			fakeS3.upload(
+				uploadKey(upload.id),
+				new Uint8Array([1, 2, 3, 4]),
+				"image/png",
+			);
+
+			const results = await Promise.all(
+				Array.from({ length: 5 }, () =>
+					handleCompleteUpload(
+						apiRequest(`/api/uploads/${upload.id}/complete`, {
+							method: "POST",
+						}),
+						routeParams({ id: upload.id }),
+					),
+				),
+			);
+
+			for (const res of results) {
+				expect(res.status).toBe(200);
+				expect((await json<UploadDto>(res)).status).toBe("complete");
+			}
+			expect(enqueuedJobs).toEqual([
+				{ name: "import.upload", data: { uploadId: upload.id } },
+			]);
+		});
+
 		it("allows admin to complete any upload", async () => {
 			const createReq = apiRequest("/api/uploads", {
 				method: "POST",

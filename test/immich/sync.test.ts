@@ -1,9 +1,19 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { db } from "@/lib/db";
 import { resetEnvCache } from "@/lib/env";
+import type { MetadataSearchWithTaken } from "@/lib/immich/client";
 import { runScan } from "@/lib/immich/sync";
 import { stopBoss } from "@/lib/jobs/queue";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
+import { createImmichAsset, createMeme } from "@/test/helpers/factories";
 import {
 	type FakeImmich,
 	fakeAsset,
@@ -117,7 +127,11 @@ describeWithDb("runScan", () => {
 		});
 		expect(syncState?.backfillDone).toBe(true);
 		expect(syncState?.smartDone).toBe(true);
-		expect(syncState?.cursor).toBe("2026-11-14T11:00:00.000Z");
+		// Incremental cursor starts 5 minutes before the backfill began.
+		expect(syncState?.backfillStartedAt).not.toBeNull();
+		expect(new Date(syncState?.cursor ?? "").getTime()).toBe(
+			(syncState?.backfillStartedAt?.getTime() ?? 0) - 5 * 60 * 1000,
+		);
 		expect(syncState?.lastError).toBeNull();
 		expect(syncState?.lastRunAt).not.toBeNull();
 	});
@@ -142,62 +156,149 @@ describeWithDb("runScan", () => {
 		expect(row?.error).toBe("gone");
 	});
 
-	it("backfill: resumes from SyncState.backfillPage on subsequent run", async () => {
-		// Create 3 assets with different updatedAt
-		const a1 = fakeAsset({
-			id: "a0000000-0000-0000-0000-000000000011",
-			originalFileName: "a1.png",
-			updatedAt: "2026-11-14T01:00:00Z",
-		});
-		const a2 = fakeAsset({
-			id: "a0000000-0000-0000-0000-000000000012",
-			originalFileName: "a2.png",
-			updatedAt: "2026-11-14T02:00:00Z",
-		});
-		fakeImmich.add(a1);
-		fakeImmich.add(a2);
-
-		// Mock client to return page 1 with nextPage 2, then fail on page 2
-		let callCount = 0;
+	/** Makes the fake serve 2 assets per page, so paging is actually exercised. */
+	function smallPages() {
+		const real = fakeImmich.client.searchMetadata.bind(fakeImmich.client);
+		const queries: MetadataSearchWithTaken[] = [];
 		fakeImmich.client.searchMetadata = async (q) => {
-			callCount++;
-			if (q.page === 1) {
-				return { items: [a1], nextPage: "2" };
-			}
-			if (q.page === 2 && callCount === 2) {
-				throw new Error("Simulated network crash on page 2");
-			}
-			return { items: [a2], nextPage: null };
+			queries.push(q);
+			return real({ ...q, size: 2 });
+		};
+		return queries;
+	}
+
+	const timed = (n: number, fileCreatedAt: string) =>
+		fakeAsset({
+			id: `a0000000-0000-0000-0000-0000000001${String(n).padStart(2, "0")}`,
+			originalFileName: `a${n}.png`,
+			fileCreatedAt,
+			updatedAt: fileCreatedAt,
+		});
+
+	it("backfill: resumes from SyncState.backfillCursor after a crash", async () => {
+		const a1 = timed(1, "2026-11-14T01:00:00.000Z");
+		const a2 = timed(2, "2026-11-14T02:00:00.000Z");
+		const a3 = timed(3, "2026-11-14T03:00:00.000Z");
+		const a4 = timed(4, "2026-11-14T04:00:00.000Z");
+		const a5 = timed(5, "2026-11-14T05:00:00.000Z");
+		for (const a of [a1, a2, a3, a4, a5]) fakeImmich.add(a);
+		const queries = smallPages();
+
+		// Crash on the third metadata request (after two pages: a1..a3 processed).
+		const read = fakeImmich.client.searchMetadata;
+		let calls = 0;
+		fakeImmich.client.searchMetadata = async (q) => {
+			if (++calls === 3) throw new Error("Simulated network crash");
+			return read(q);
 		};
 
-		// First run should fail on page 2
 		await expect(runScan("backfill")).rejects.toThrow(
 			"Simulated network crash",
 		);
 
-		// SyncState should have recorded backfillPage: 2 and lastError
 		let state = await db().syncState.findUnique({ where: { id: "immich" } });
-		expect(state?.backfillPage).toBe(2);
 		expect(state?.backfillDone).toBe(false);
+		expect(state?.backfillCursor).toBe("2026-11-14T03:00:00.000Z");
+		expect(state?.backfillPage).toBe(3); // progress counter: pages read + 1
 		expect(state?.lastError).toContain("Simulated network crash");
+		expect(await db().immichAsset.count()).toBe(3);
 
-		// Asset 1 from page 1 was saved
-		const rowA1 = await db().immichAsset.findUnique({
-			where: { immichId: a1.id },
-		});
-		expect(rowA1).not.toBeNull();
-
-		// Second run: resumes from page 2
+		// Second run resumes at the cursor (minus 1 ms), not at an index.
+		queries.length = 0;
+		fakeImmich.client.searchMetadata = read;
 		await runScan("backfill");
 
+		expect(queries[0]).toMatchObject({
+			page: 1,
+			takenAfter: "2026-11-14T02:59:59.999Z",
+		});
 		state = await db().syncState.findUnique({ where: { id: "immich" } });
 		expect(state?.backfillDone).toBe(true);
 		expect(state?.lastError).toBeNull();
+		expect(
+			await db().immichAsset.findUnique({ where: { immichId: a5.id } }),
+		).not.toBeNull();
+	});
 
-		const rowA2 = await db().immichAsset.findUnique({
-			where: { immichId: a2.id },
+	it("backfill: an asset removed before the current page does not make it skip another", async () => {
+		const assets = [
+			timed(1, "2026-11-14T01:00:00.000Z"),
+			timed(2, "2026-11-14T02:00:00.000Z"),
+			timed(3, "2026-11-14T03:00:00.000Z"),
+			timed(4, "2026-11-14T04:00:00.000Z"),
+			timed(5, "2026-11-14T05:00:00.000Z"),
+		];
+		for (const a of assets) fakeImmich.add(a);
+		smallPages();
+
+		// Like immich.delete removing an already-imported asset mid-backfill:
+		// after each page is served, the oldest remaining asset disappears.
+		const read = fakeImmich.client.searchMetadata;
+		let served = 0;
+		fakeImmich.client.searchMetadata = async (q) => {
+			const result = await read(q);
+			const gone = assets[served++];
+			if (gone) fakeImmich.assets.delete(gone.id);
+			return result;
+		};
+
+		await runScan("backfill");
+
+		const immichIds = (await db().immichAsset.findMany()).map(
+			(a) => a.immichId,
+		);
+		expect(immichIds.sort()).toEqual(assets.map((a) => a.id).sort());
+	});
+
+	it("backfill: a full page of assets with the same timestamp still terminates and reads all of them", async () => {
+		const same = "2026-11-14T05:00:00.000Z";
+		const assets = [timed(1, same), timed(2, same), timed(3, same)];
+		for (const a of assets) fakeImmich.add(a);
+		const real = fakeImmich.client.searchMetadata.bind(fakeImmich.client);
+		fakeImmich.client.searchMetadata = (q) => real({ ...q, size: 2 });
+
+		await runScan("backfill");
+
+		expect(await db().immichAsset.count()).toBe(3);
+		const state = await db().syncState.findUnique({ where: { id: "immich" } });
+		expect(state?.backfillDone).toBe(true);
+	});
+
+	describe("stuck accepted sweep", () => {
+		const queuedImports = (assetId: string) =>
+			db().$queryRaw<{ id: string }[]>`
+				SELECT id FROM pgboss.job
+				WHERE name = 'import.immich' AND data->>'immichAssetId' = ${assetId}`;
+		const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+
+		it("re-enqueues import.immich once for assets accepted over 30 minutes ago without a meme", async () => {
+			const stuck = await createImmichAsset({
+				triageStatus: "accepted",
+				decidedAt: minutesAgo(31),
+			});
+			const recent = await createImmichAsset({
+				triageStatus: "accepted",
+				decidedAt: minutesAgo(5),
+			});
+			const meme = await createMeme();
+			const linked = await createImmichAsset({
+				triageStatus: "accepted",
+				decidedAt: minutesAgo(90),
+				memeId: meme.id,
+			});
+			const scored = await createImmichAsset({
+				triageStatus: "scored",
+				decidedAt: minutesAgo(90),
+			});
+
+			await runScan();
+			await runScan(); // repeats must not pile up
+
+			expect(await queuedImports(stuck.id)).toHaveLength(1);
+			expect(await queuedImports(recent.id)).toHaveLength(0);
+			expect(await queuedImports(linked.id)).toHaveLength(0);
+			expect(await queuedImports(scored.id)).toHaveLength(0);
 		});
-		expect(rowA2).not.toBeNull();
 	});
 
 	it("incremental: uses updatedAfter = cursor and advances cursor to max updatedAt seen", async () => {

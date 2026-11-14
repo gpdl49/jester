@@ -124,13 +124,15 @@ model Setting {
 }
 
 model SyncState {
-  id           String    @id // "immich"
-  cursor       String? // ISO timestamp for updatedAfter
-  backfillPage Int       @default(1) @map("backfill_page")
-  backfillDone Boolean   @default(false) @map("backfill_done")
-  smartDone    Boolean   @default(false) @map("smart_done")
-  lastRunAt    DateTime? @map("last_run_at")
-  lastError    String?   @map("last_error")
+  id                String    @id // "immich"
+  cursor            String? // ISO timestamp for updatedAfter
+  backfillPage      Int       @default(1) @map("backfill_page") // progress counter (pages read), not a resume point
+  backfillCursor    String?   @map("backfill_cursor") // ISO fileCreatedAt of the last asset seen; backfill resume point
+  backfillStartedAt DateTime? @map("backfill_started_at")
+  backfillDone      Boolean   @default(false) @map("backfill_done")
+  smartDone         Boolean   @default(false) @map("smart_done")
+  lastRunAt         DateTime? @map("last_run_at")
+  lastError         String?   @map("last_error")
 
   @@map("sync_state")
 }

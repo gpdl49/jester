@@ -114,12 +114,19 @@ export async function completeUpload(
 		);
 	}
 
-	const updated = await db().upload.update({
-		where: { id: upload.id },
+	// The transition is part of the UPDATE, so of several concurrent callers
+	// only the one that makes it enqueues the import.
+	const { count } = await db().upload.updateMany({
+		where: { id: upload.id, status: { in: ["pending", "failed"] } },
 		data: { status: "complete" },
 	});
-
-	await enqueue(importUpload, { uploadId: upload.id });
+	const updated = await db().upload.findUnique({ where: { id: upload.id } });
+	if (!updated) {
+		throw notFound("Upload not found");
+	}
+	if (count === 1) {
+		await enqueue(importUpload, { uploadId: upload.id });
+	}
 
 	return toUploadDto(updated);
 }

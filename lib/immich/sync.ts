@@ -1,9 +1,10 @@
 import { db } from "@/lib/db";
 import { features } from "@/lib/env";
 import type { Prisma } from "@/lib/generated/prisma/client";
-import { immich } from "@/lib/immich/client";
+import { immich, type MetadataSearchWithTaken } from "@/lib/immich/client";
 import { scorePrefilter } from "@/lib/immich/prefilter";
 import type { ImmichAssetDto, ImmichClient } from "@/lib/immich/types";
+import { importImmich } from "@/lib/jobs/definitions/import-immich";
 import { triageClassify } from "@/lib/jobs/definitions/triage-classify";
 import { enqueue } from "@/lib/jobs/queue";
 import { getSetting } from "@/lib/settings";
@@ -17,6 +18,10 @@ const SMART_BATCH_SIZE = 250;
  * skipped forever. Processing an asset twice is harmless.
  */
 const CURSOR_OVERLAP_MS = 5 * 60 * 1000;
+
+/** How long an asset may sit in `accepted` without a meme before the sweep re-queues its import. */
+const STUCK_ACCEPTED_MS = 30 * 60 * 1000;
+const STUCK_SWEEP_LIMIT = 200;
 
 const withOverlap = (cursor: string | null): string | undefined => {
 	if (!cursor) return undefined;
@@ -170,6 +175,35 @@ async function processAsset(
 	}
 }
 
+/**
+ * Accepting an asset and enqueueing its import are two steps; if the process
+ * dies in between, the asset stays `accepted` with no job. Re-queue the import
+ * of every asset accepted more than 30 minutes ago that still has no meme.
+ * The singleton key keeps repeated sweeps from piling up jobs; the import is
+ * idempotent anyway.
+ */
+export async function sweepStuckAccepted(now = new Date()): Promise<number> {
+	const cutoff = new Date(now.getTime() - STUCK_ACCEPTED_MS);
+	const stuck = await db().immichAsset.findMany({
+		where: {
+			triageStatus: "accepted",
+			memeId: null,
+			OR: [{ decidedAt: { lt: cutoff } }, { decidedAt: null }],
+		},
+		select: { id: true },
+		orderBy: { id: "asc" },
+		take: STUCK_SWEEP_LIMIT,
+	});
+	for (const { id } of stuck) {
+		await enqueue(
+			importImmich,
+			{ immichAssetId: id },
+			{ singletonKey: id, singletonSeconds: STUCK_ACCEPTED_MS / 1000 },
+		);
+	}
+	return stuck.length;
+}
+
 async function runSmartQueries(
 	client: ImmichClient,
 	threshold: number,
@@ -201,7 +235,7 @@ async function runSmartQueries(
 /**
  * Runs the sync scan between Immich and the local database (docs/contract.md "immich.scan").
  * - Default mode: incremental once backfill is done, otherwise backfill, whatever the payload says.
- * - Backfill resumes from SyncState.backfillPage.
+ * - Backfill is keyset-paged by fileCreatedAt and resumes from SyncState.backfillCursor.
  * - Incremental uses updatedAfter cursor.
  */
 export async function runScan(
@@ -221,6 +255,11 @@ export async function runScan(
 		});
 	}
 
+	// Independent of the scan itself: don't let a sweep failure block it.
+	await sweepStuckAccepted().catch((err) =>
+		console.error("[immich] stuck-accepted sweep failed", err),
+	);
+
 	const effectiveMode = syncState.backfillDone ? "incremental" : "backfill";
 	const threshold = await getSetting("prefilter.threshold");
 	const client = immich();
@@ -236,58 +275,93 @@ export async function runScan(
 				});
 			}
 
-			// 2. Page through metadata search ordered asc by updatedAt, size 500
-			let currentPage = syncState.backfillPage;
-			let maxUpdatedAtSeen = syncState.cursor
-				? new Date(syncState.cursor)
+			// 2. Keyset backfill. Paging by index would skip an asset whenever one
+			//    before the current page disappears mid-run (including our own
+			//    immich.delete), so always ask for page 1 with takenAfter = the
+			//    last fileCreatedAt seen (minus 1 ms; assets tied with it come
+			//    back and are skipped by id). The cursor is persisted after every
+			//    page; backfillPage only counts pages for the dashboard.
+			const startedAt = syncState.backfillStartedAt ?? new Date();
+			if (!syncState.backfillStartedAt) {
+				syncState = await db().syncState.update({
+					where: { id: "immich" },
+					data: { backfillStartedAt: startedAt },
+				});
+			}
+
+			let cursor = syncState.backfillCursor
+				? new Date(syncState.backfillCursor)
 				: null;
+			if (cursor && Number.isNaN(cursor.getTime())) cursor = null;
+			let pagesRead = syncState.backfillPage;
+			let pageIndex = 1; // > 1 only while a full page of ties can't move the cursor
+			const seen = new Set<string>();
 
 			while (true) {
-				const page = await client.searchMetadata({
-					page: currentPage,
+				const query: MetadataSearchWithTaken = {
+					page: pageIndex,
 					size: BATCH_SIZE,
 					type: "IMAGE",
 					withExif: true,
 					withDeleted: true,
 					order: "asc",
-				});
+					...(cursor
+						? { takenAfter: new Date(cursor.getTime() - 1).toISOString() }
+						: {}),
+				};
+				const page = await client.searchMetadata(query);
 
+				let maxTaken = cursor;
 				for (const item of page.items) {
-					if (item.type !== "IMAGE") {
-						continue;
-					}
-					if (item.updatedAt) {
-						const d = new Date(item.updatedAt);
-						if (!maxUpdatedAtSeen || d > maxUpdatedAtSeen) {
-							maxUpdatedAtSeen = d;
+					if (item.fileCreatedAt) {
+						const taken = new Date(item.fileCreatedAt);
+						if (
+							!Number.isNaN(taken.getTime()) &&
+							(!maxTaken || taken > maxTaken)
+						) {
+							maxTaken = taken;
 						}
 					}
+					if (item.type !== "IMAGE" || seen.has(item.id)) {
+						continue;
+					}
+					seen.add(item.id);
 					await processAsset(client, item, threshold);
 				}
 
-				if (page.nextPage && page.items.length > 0) {
-					const nextPageIndex = parseInt(page.nextPage, 10);
-					currentPage = Number.isNaN(nextPageIndex)
-						? currentPage + 1
-						: nextPageIndex;
-					await db().syncState.update({
-						where: { id: "immich" },
-						data: {
-							backfillPage: currentPage,
-							cursor: maxUpdatedAtSeen?.toISOString() ?? syncState.cursor,
-						},
-					});
-				} else {
-					// Backfill complete
+				if (!(page.nextPage && page.items.length > 0)) {
+					// Backfill complete. Anything updated while it ran may have been
+					// read before its update, so start the incremental cursor 5
+					// minutes before the backfill began.
 					await db().syncState.update({
 						where: { id: "immich" },
 						data: {
 							backfillDone: true,
-							cursor: maxUpdatedAtSeen?.toISOString() ?? syncState.cursor,
+							backfillPage: pagesRead + 1,
+							cursor: new Date(
+								startedAt.getTime() - CURSOR_OVERLAP_MS,
+							).toISOString(),
 						},
 					});
 					break;
 				}
+
+				const advanced = maxTaken !== null && (!cursor || maxTaken > cursor);
+				if (advanced) {
+					cursor = maxTaken;
+					pageIndex = 1;
+				} else {
+					const next = parseInt(page.nextPage, 10);
+					pageIndex = Number.isNaN(next) ? pageIndex + 1 : next;
+				}
+				pagesRead += 1;
+				await db().syncState.update({
+					where: { id: "immich" },
+					data: {
+						backfillPage: pagesRead,
+						backfillCursor: cursor?.toISOString() ?? null,
+					},
+				});
 			}
 		} else {
 			// Incremental sync:
