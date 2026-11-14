@@ -10,6 +10,21 @@ import { getSetting } from "@/lib/settings";
 
 const BATCH_SIZE = 500;
 const SMART_BATCH_SIZE = 250;
+/**
+ * Incremental runs re-read this much before the cursor. `updatedAfter` is
+ * exclusive and timestamps are millisecond-precise, so assets that tie with the
+ * cursor (or commit just after the last page was read) would otherwise be
+ * skipped forever. Processing an asset twice is harmless.
+ */
+const CURSOR_OVERLAP_MS = 5 * 60 * 1000;
+
+const withOverlap = (cursor: string | null): string | undefined => {
+	if (!cursor) return undefined;
+	const t = new Date(cursor).getTime();
+	return Number.isNaN(t)
+		? undefined
+		: new Date(t - CURSOR_OVERLAP_MS).toISOString();
+};
 
 type ProcessOptions = {
 	additionalSmartHit?: string;
@@ -170,7 +185,12 @@ async function runSmartQueries(
 			type: "IMAGE",
 			...(createdAfter ? { createdAfter } : {}),
 		});
-		for (const item of page.items) {
+		for (const hit of page.items) {
+			// Smart search may omit EXIF; scoring that as "no camera" would push real
+			// photos over the threshold, so load the full asset first.
+			const item =
+				hit.exifInfo === undefined ? await client.getAsset(hit.id) : hit;
+			if (!item) continue;
 			await processAsset(client, item, threshold, {
 				additionalSmartHit: query,
 			});
@@ -272,7 +292,7 @@ export async function runScan(
 		} else {
 			// Incremental sync:
 			// 1. Run smart queries with createdAfter
-			await runSmartQueries(client, threshold, syncState.cursor ?? undefined);
+			await runSmartQueries(client, threshold, withOverlap(syncState.cursor));
 
 			// 2. Page metadata search with updatedAfter = cursor
 			let incrementalPage = 1;
@@ -287,7 +307,7 @@ export async function runScan(
 					type: "IMAGE",
 					withExif: true,
 					withDeleted: true,
-					updatedAfter: syncState.cursor ?? undefined,
+					updatedAfter: withOverlap(syncState.cursor),
 					order: "asc",
 				});
 
