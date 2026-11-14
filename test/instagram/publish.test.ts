@@ -298,7 +298,7 @@ describeWithDb("instagram publisher state machine", () => {
 		expect(afterSecondRun.igMediaId).toBe("ig_pub_reused");
 	});
 
-	it("guards against double-posting by checking recentMedia before calling publish", async () => {
+	it("on a retry, guards against double-posting by checking recentMedia before calling publish", async () => {
 		const account = await createInstagramAccount({
 			igUserId: "ig_user_1",
 			accessTokenEnc: encrypt("valid_token", validKey),
@@ -313,6 +313,8 @@ describeWithDb("instagram publisher state machine", () => {
 			status: "queued",
 			caption: "Double post prevention test",
 			accountId: account.id,
+			// A previous attempt already ran (and may have reached media_publish)
+			attempts: 1,
 		});
 
 		let publishEndpointCalled = false;

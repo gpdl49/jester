@@ -131,14 +131,17 @@ export async function renderImageBuffer(
 	sourceBuffer: Buffer | Uint8Array,
 	targetRatio?: number,
 ): Promise<{ buffer: Buffer; geometry: CanvasGeometry }> {
-	const metadata = await sharp(sourceBuffer).metadata();
-	const origW = metadata.width ?? TARGET_WIDTH;
-	const origH = metadata.height ?? TARGET_WIDTH;
+	// Apply the EXIF orientation first so width and height are what viewers see.
+	const { data: orientedBuffer, info: orientedInfo } = await sharp(sourceBuffer)
+		.rotate()
+		.toBuffer({ resolveWithObject: true });
+	const origW = orientedInfo.width || TARGET_WIDTH;
+	const origH = orientedInfo.height || TARGET_WIDTH;
 
 	const geometry = targetCanvas(origW, origH, targetRatio);
-	const bgColor = await computeEdgeMedianColor(sourceBuffer);
+	const bgColor = await computeEdgeMedianColor(orientedBuffer);
 
-	const resizedImage = await sharp(sourceBuffer)
+	const resizedImage = await sharp(orientedBuffer)
 		.resize(geometry.imageWidth, geometry.imageHeight)
 		.toBuffer();
 
@@ -211,9 +214,11 @@ export async function renderPost(postId: string): Promise<string[]> {
 
 	let carouselRatio: number | undefined;
 	if (post.items.length > 1) {
-		const meta0 = await sharp(sourceBuffers[0]).metadata();
-		const w0 = meta0.width ?? TARGET_WIDTH;
-		const h0 = meta0.height ?? TARGET_WIDTH;
+		const { info: meta0 } = await sharp(sourceBuffers[0])
+			.rotate()
+			.toBuffer({ resolveWithObject: true });
+		const w0 = meta0.width || TARGET_WIDTH;
+		const h0 = meta0.height || TARGET_WIDTH;
 		carouselRatio = Math.max(
 			MIN_ASPECT_RATIO,
 			Math.min(MAX_ASPECT_RATIO, w0 / h0),

@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
+import { PUBLISHING_STALE_MS } from "@/lib/instagram/publish";
 import { instagramPublish } from "@/lib/jobs/definitions/instagram-publish";
 import { enqueue } from "@/lib/jobs/queue";
 import { getNextSlotInstants } from "@/lib/schedule/slots";
@@ -88,14 +89,15 @@ export async function runSchedulerTick(
 				}
 
 				takenTimes.add(nextInstant.at.getTime());
-				await db().post.update({
-					where: { id: post.id },
+				// Guarded: skip a post cancelled or slotted since we read it.
+				const res = await db().post.updateMany({
+					where: { id: post.id, status: "queued", scheduledAt: null },
 					data: {
 						scheduledAt: nextInstant.at,
 						slotId: nextInstant.slot.id ?? null,
 					},
 				});
-				assignedCount++;
+				if (res.count > 0) assignedCount++;
 			}
 		}
 	}
@@ -110,7 +112,17 @@ export async function runSchedulerTick(
 		orderBy: [{ scheduledAt: "asc" }, { createdAt: "asc" }],
 	});
 
-	for (const post of duePosts) {
+	// Posts stuck in `publishing` belong to a crashed worker (the publisher
+	// reclaims them once they are stale); nudge them along.
+	const stalePublishing = await db().post.findMany({
+		where: {
+			status: "publishing",
+			updatedAt: { lt: new Date(now.getTime() - PUBLISHING_STALE_MS) },
+		},
+		orderBy: { updatedAt: "asc" },
+	});
+
+	for (const post of [...duePosts, ...stalePublishing]) {
 		await enqueueFn(
 			instagramPublish,
 			{ postId: post.id },

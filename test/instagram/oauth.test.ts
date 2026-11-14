@@ -73,6 +73,21 @@ describeWithDb("instagram oauth and accounts routes", () => {
 		});
 	});
 
+	describe("state cookie flags", () => {
+		it("marks the state cookie Secure when PUBLIC_URL is https", async () => {
+			process.env.PUBLIC_URL = "https://memes.example.com";
+			resetEnvCache();
+			const res = await oauthConnect(
+				apiRequest("/api/instagram/connect", { user: ADMIN_USER }),
+				{},
+			);
+			expect(res.headers.get("Set-Cookie")).toContain("Secure");
+			expect(res.headers.get("Location")).toContain(
+				encodeURIComponent("https://memes.example.com/api/instagram/callback"),
+			);
+		});
+	});
+
 	describe("GET /api/instagram/callback", () => {
 		it("rejects mismatched or missing state cookie with 400", async () => {
 			const req = apiRequest(
@@ -83,6 +98,43 @@ describeWithDb("instagram oauth and accounts routes", () => {
 				},
 			);
 			const res = await oauthCallback(req, {});
+			expect(res.status).toBe(400);
+		});
+
+		it("is admin-only: a regular user cannot complete the flow", async () => {
+			const fetchSpy = vi.fn();
+			vi.stubGlobal("fetch", fetchSpy);
+			const res = await oauthCallback(
+				apiRequest("/api/instagram/callback?code=c&state=s", {
+					user: TEST_USER,
+					headers: { Cookie: "ig_oauth_state=s" },
+				}),
+				{},
+			);
+			expect(res.status).toBe(403);
+			expect(fetchSpy).not.toHaveBeenCalled();
+		});
+
+		it("redirects to /settings when the user denies access", async () => {
+			const res = await oauthCallback(
+				apiRequest(
+					"/api/instagram/callback?error=access_denied&error_description=nope",
+					{ user: ADMIN_USER },
+				),
+				{},
+			);
+			expect(res.status).toBe(302);
+			expect(res.headers.get("Location")).toBe(
+				"http://localhost:3000/settings?instagram=denied",
+			);
+			expect(res.headers.get("Set-Cookie")).toContain("Max-Age=0");
+		});
+
+		it("rejects a callback with neither code nor error with 400", async () => {
+			const res = await oauthCallback(
+				apiRequest("/api/instagram/callback", { user: ADMIN_USER }),
+				{},
+			);
 			expect(res.status).toBe(400);
 		});
 

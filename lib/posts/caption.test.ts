@@ -149,4 +149,15 @@ describe("renderCaption", () => {
 
 		expect(result.warnings).toContain("Post contains sensitive content");
 	});
+
+	it("keeps user text literal: $-patterns and placeholder look-alikes", async () => {
+		const result = await renderCaption({
+			caption: "Only $& and $1 and $' here, also {credit} and {hashtags}",
+			items: [{ meme: { creditText: "someone", hashtags: ["a"] } }],
+		});
+
+		expect(result.text).toBe(
+			"Only $& and $1 and $' here, also {credit} and {hashtags}\n\n📸 someone\n\n#a",
+		);
+	});
 });

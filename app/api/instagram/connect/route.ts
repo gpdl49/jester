@@ -26,7 +26,9 @@ export const GET = withAuth(async (_request, _context, user) => {
 	headers.set("Location", authUrl.toString());
 	headers.append(
 		"Set-Cookie",
-		`ig_oauth_state=${state}; Path=/api/instagram; HttpOnly; SameSite=Lax; Max-Age=600`,
+		`ig_oauth_state=${state}; Path=/api/instagram; HttpOnly; SameSite=Lax; Max-Age=600${
+			e.PUBLIC_URL.startsWith("https://") ? "; Secure" : ""
+		}`,
 	);
 
 	return new Response(null, {

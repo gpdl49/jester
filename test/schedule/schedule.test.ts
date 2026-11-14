@@ -174,4 +174,61 @@ describeWithDb("schedule API and scheduler tick", () => {
 		expect(run2.assigned).toBe(0);
 		expect(run2.enqueued).toBe(0);
 	});
+
+	it("runSchedulerTick re-enqueues a post a crashed worker left in publishing", async () => {
+		const m1 = await createMeme({ status: "approved" });
+		const m2 = await createMeme({ status: "approved" });
+		const stuck = await createPost({ memeIds: [m1.id], status: "queued" });
+		const busy = await createPost({ memeIds: [m2.id], status: "queued" });
+		const now = new Date("2026-03-01T12:00:00Z");
+		await db().post.update({
+			where: { id: stuck.id },
+			data: {
+				status: "publishing",
+				scheduledAt: new Date("2026-03-01T11:00:00Z"),
+				updatedAt: new Date("2026-03-01T11:00:00Z"),
+			},
+		});
+		await db().post.update({
+			where: { id: busy.id },
+			data: {
+				status: "publishing",
+				scheduledAt: new Date("2026-03-01T11:59:00Z"),
+				updatedAt: new Date("2026-03-01T11:59:00Z"),
+			},
+		});
+
+		const mockEnqueue = vi.fn().mockResolvedValue("job-id");
+		const result = await runSchedulerTick(now, mockEnqueue);
+
+		expect(result.enqueued).toBe(1);
+		expect(mockEnqueue).toHaveBeenCalledWith(
+			expect.objectContaining({ name: "instagram.publish" }),
+			{ postId: stuck.id },
+			{ singletonKey: stuck.id },
+		);
+	});
+
+	it("runSchedulerTick does not slot a post cancelled between read and write", async () => {
+		await db().scheduleSlot.create({
+			data: { weekday: 2, time: "14:00", enabled: true },
+		});
+		const m1 = await createMeme({ status: "approved" });
+		const post = await createPost({ memeIds: [m1.id], status: "queued" });
+		await db().post.update({
+			where: { id: post.id },
+			data: { status: "cancelled" },
+		});
+
+		const result = await runSchedulerTick(
+			new Date("2026-03-01T00:00:00Z"),
+			vi.fn(),
+		);
+
+		expect(result.assigned).toBe(0);
+		expect(
+			(await db().post.findUniqueOrThrow({ where: { id: post.id } }))
+				.scheduledAt,
+		).toBeNull();
+	});
 });

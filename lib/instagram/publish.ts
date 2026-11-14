@@ -8,12 +8,7 @@ import {
 } from "@/lib/instagram/graph";
 import { renderPost } from "@/lib/instagram/render";
 import { renderCaption } from "@/lib/posts/caption";
-import {
-	headObject,
-	INSTAGRAM_URL_TTL_SECONDS,
-	instagramKey,
-	presignGet,
-} from "@/lib/s3";
+import { INSTAGRAM_URL_TTL_SECONDS, instagramKey, presignGet } from "@/lib/s3";
 import { getSetting } from "@/lib/settings";
 
 export type PublishOptions = {
@@ -22,6 +17,9 @@ export type PublishOptions = {
 	graphClient?: GraphClient;
 	fetch?: typeof fetch;
 };
+
+/** A post stuck in `publishing` this long belongs to a crashed worker. */
+export const PUBLISHING_STALE_MS = 10 * 60 * 1000;
 
 const defaultSleep = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -61,32 +59,60 @@ export async function publishPost(
 		return;
 	}
 
-	// Only queued or publishing proceed; everything else is a no-op
-	if (post.status !== "queued" && post.status !== "publishing") {
+	// Only queued posts, or publishing posts abandoned by a crashed worker,
+	// proceed; everything else is a no-op.
+	const now = nowFn();
+	const staleBefore = new Date(now.getTime() - PUBLISHING_STALE_MS);
+	const claimable =
+		post.status === "queued" ||
+		(post.status === "publishing" && post.updatedAt < staleBefore);
+	if (!claimable) {
 		return;
 	}
 
-	// Skip and re-queue when publishing is paused
+	// Skip and re-queue when publishing is paused (does not use up an attempt)
 	const paused = await getSetting("publishing.paused");
 	if (paused) {
-		await db().post.update({
-			where: { id: postId },
-			data: {
-				status: "queued",
-				scheduledAt: null,
-			},
+		await db().post.updateMany({
+			where: { id: postId, status: { in: ["queued", "publishing"] } },
+			data: { status: "queued", scheduledAt: null },
 		});
 		return;
 	}
 
+	// Atomic claim: only one caller moves the post to publishing. Two jobs (a
+	// duplicate enqueue, a pg-boss retry) must never publish the same post.
 	const newAttempts = post.attempts + 1;
-	await db().post.update({
-		where: { id: postId },
-		data: {
-			status: "publishing",
-			attempts: newAttempts,
+	const claim = await db().post.updateMany({
+		where: {
+			id: postId,
+			attempts: post.attempts,
+			OR: [
+				{ status: "queued" },
+				{ status: "publishing", updatedAt: { lt: staleBefore } },
+			],
 		},
+		data: { status: "publishing", attempts: newAttempts },
 	});
+	if (claim.count === 0) {
+		return;
+	}
+
+	// A previous attempt may have reached media_publish before failing.
+	const mayHaveBeenPublished = post.attempts > 0;
+
+	/** Back to the queue without using up the attempt (rate limits). */
+	const deferPost = async (until: Date, error: string | null) => {
+		await db().post.update({
+			where: { id: postId },
+			data: {
+				status: "queued",
+				scheduledAt: until,
+				attempts: post.attempts,
+				error,
+			},
+		});
+	};
 
 	try {
 		// Resolve the Instagram account
@@ -126,6 +152,22 @@ export async function publishPost(
 			return;
 		}
 
+		if (account.tokenExpiresAt.getTime() <= nowFn().getTime()) {
+			const errorMsg = "Instagram token expired: reconnect the account";
+			await db().post.update({
+				where: { id: postId },
+				data: { status: "failed", error: errorMsg },
+			});
+			await audit({
+				actorId: null,
+				action: "post.fail",
+				subjectType: "post",
+				subjectId: postId,
+				data: { error: errorMsg },
+			});
+			return;
+		}
+
 		const accessToken = decrypt(account.accessTokenEnc);
 		const client =
 			options.graphClient ??
@@ -138,28 +180,8 @@ export async function publishPost(
 		// Check publishing limit
 		const limit = await client.publishingLimit(account.igUserId, accessToken);
 		if (limit.used >= 95) {
-			const deferDate = new Date(nowFn().getTime() + 60 * 60 * 1000);
-			await db().post.update({
-				where: { id: postId },
-				data: {
-					status: "queued",
-					scheduledAt: deferDate,
-				},
-			});
+			await deferPost(new Date(nowFn().getTime() + 60 * 60 * 1000), null);
 			return;
-		}
-
-		// Ensure rendered JPEG files exist in S3
-		let needsRender = false;
-		for (const item of post.items) {
-			const head = await headObject(instagramKey(postId, item.position));
-			if (!head) {
-				needsRender = true;
-				break;
-			}
-		}
-		if (needsRender) {
-			await renderPost(postId);
 		}
 
 		// Render the caption
@@ -201,6 +223,10 @@ export async function publishPost(
 		}
 
 		if (!canReuseContainers) {
+			// Always render fresh: the post's memes may have changed since an
+			// earlier render, and a stale rendition would publish the wrong image.
+			await renderPost(postId);
+
 			containerIds = [];
 			containerAt = nowFn();
 
@@ -270,6 +296,7 @@ export async function publishPost(
 		// Poll container status every 5 seconds for up to 2 minutes (24 iterations)
 		const MAX_POLLS = 24;
 		let isReady = false;
+		let containerPublished = false;
 		for (let poll = 0; poll < MAX_POLLS; poll++) {
 			const statusRes = await client.containerStatus(
 				targetContainerId,
@@ -279,6 +306,7 @@ export async function publishPost(
 				statusRes.status_code === "FINISHED" ||
 				statusRes.status_code === "PUBLISHED"
 			) {
+				containerPublished = statusRes.status_code === "PUBLISHED";
 				isReady = true;
 				break;
 			}
@@ -300,17 +328,36 @@ export async function publishPost(
 		}
 
 		// Before publishing, guard against a double post:
-		// If recentMedia has an item created after containerAt whose caption equals the rendered caption, treat as success
+		// On a retry (an earlier attempt may have reached media_publish), if recentMedia has
+		// an unclaimed item created after containerAt with our caption, treat it as success
 		let publishedMediaId: string | undefined;
 		let permalink: string | null = null;
 
-		const recent = await client.recentMedia(account.igUserId, 10, accessToken);
-		if (containerAt) {
+		if (containerAt && mayHaveBeenPublished) {
+			const recent = await client.recentMedia(
+				account.igUserId,
+				10,
+				accessToken,
+			);
+			// Media already claimed by other posts never counts as ours.
+			const claimedIds = new Set(
+				(
+					await db().post.findMany({
+						where: {
+							igMediaId: { in: recent.data.map((m) => m.id) },
+							id: { not: postId },
+						},
+						select: { igMediaId: true },
+					})
+				).map((p) => p.igMediaId),
+			);
 			for (const mediaItem of recent.data) {
+				if (claimedIds.has(mediaItem.id)) continue;
 				const mediaDate = new Date(mediaItem.timestamp);
 				if (
 					mediaDate.getTime() >= containerAt.getTime() - 1000 &&
-					mediaItem.caption === renderedCaption
+					(containerPublished ||
+						(mediaItem.caption ?? "").trim() === renderedCaption.trim())
 				) {
 					publishedMediaId = mediaItem.id;
 					permalink = mediaItem.permalink ?? null;
@@ -383,6 +430,10 @@ export async function publishPost(
 		}
 
 		const errorMsg = err instanceof Error ? err.message : String(err);
+		if (err instanceof GraphError && err.isRateLimit) {
+			await deferPost(new Date(nowFn().getTime() + 60 * 60 * 1000), errorMsg);
+			return;
+		}
 		if (newAttempts < 3) {
 			const backoffMs = 5 * newAttempts * 60 * 1000;
 			await db().post.update({
