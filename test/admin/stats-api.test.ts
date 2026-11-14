@@ -36,6 +36,7 @@ describeWithDb("stats API", () => {
 		// 3. Seed Posts
 		// draft post (should not count as queued)
 		await createPost([m1.id], { status: "draft" });
+		await createPost([m1.id], { status: "published" });
 		// queued post 1 (scheduled in 2 hours)
 		await createPost([m2.id], {
 			status: "queued",
@@ -100,6 +101,7 @@ describeWithDb("stats API", () => {
 
 		// Queued posts
 		expect(data.queuedPosts).toBe(2);
+		expect(data.publishedPosts).toBe(1);
 
 		// Next scheduled post (post1h should be next because scheduledAt is earlier)
 		expect(data.nextPost).not.toBeNull();

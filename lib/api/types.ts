@@ -366,6 +366,7 @@ export type DashboardStatsDto = {
 	triage: Record<TriageStatus, number>;
 	memes: Record<MemeStatus, number>;
 	queuedPosts: number;
+	publishedPosts: number;
 	nextPost: PostSummaryDto | null;
 	aiSpend: { todayUsd: number; monthUsd: number; dailyBudgetUsd: number };
 	sync: {

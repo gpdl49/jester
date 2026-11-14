@@ -13,6 +13,7 @@ import {
 	ListOrdered,
 	RefreshCw,
 	ScanSearch,
+	Send,
 	Sparkles,
 } from "lucide-react";
 import Link from "next/link";
@@ -179,6 +180,14 @@ function DashboardTiles({ stats }: { stats: DashboardStatsDto }) {
 			color: "text-accent",
 		},
 		{
+			label: "Published",
+			value: stats.publishedPosts,
+			sub: "Posted to Instagram",
+			href: "/queue",
+			icon: Send,
+			color: "text-success",
+		},
+		{
 			label: "Archived",
 			value: stats.memes.archived,
 			sub: "Archived memes",
@@ -189,7 +198,7 @@ function DashboardTiles({ stats }: { stats: DashboardStatsDto }) {
 	];
 
 	return (
-		<div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+		<div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
 			{tiles.map((tile) => {
 				const Icon = tile.icon;
 				return (
