@@ -9,6 +9,7 @@ import type { TriageResult } from "@/lib/api/types";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import type { Prisma } from "@/lib/generated/prisma/client";
+import { ApiError } from "@/lib/http/errors";
 import { immich } from "@/lib/immich/client";
 import type { ImmichBytes } from "@/lib/immich/types";
 import { triageClassify } from "@/lib/jobs/definitions/triage-classify";
@@ -19,6 +20,9 @@ import { acceptAsset } from "./service";
 
 /** States a classification may still write to; decided assets are never touched. */
 const CLASSIFIABLE = ["unscored", "pending", "scored", "error"] as const;
+
+/** How long a triage waits before re-checking whether AI is enabled again. */
+const AI_DISABLED_RETRY_MS = 60 * 60 * 1000;
 
 const TRIAGE_JSON_SCHEMA = {
 	type: "object",
@@ -162,7 +166,15 @@ export async function runTriage(
 			maxTokens: 250,
 		});
 	} catch (err) {
-		if (err instanceof BudgetExceededError) {
+		// Budget spent, or AI switched off / paused (503 feature_disabled): not
+		// the asset's fault. Keep it pending and try again later.
+		const deferUntil =
+			err instanceof BudgetExceededError
+				? nextBudgetReset()
+				: err instanceof ApiError && err.status === 503
+					? new Date(Date.now() + AI_DISABLED_RETRY_MS)
+					: null;
+		if (deferUntil) {
 			await db().immichAsset.updateMany({
 				where: { id: immichAssetId, triageStatus: { in: [...CLASSIFIABLE] } },
 				data: {
@@ -172,7 +184,7 @@ export async function runTriage(
 			await enqueue(
 				triageClassify,
 				{ immichAssetId },
-				{ startAfter: nextBudgetReset() },
+				{ startAfter: deferUntil },
 			);
 			return;
 		}

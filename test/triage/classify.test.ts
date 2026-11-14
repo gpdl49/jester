@@ -1,6 +1,8 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import * as ai from "@/lib/ai";
 import { db } from "@/lib/db";
+import { featureDisabled } from "@/lib/http/errors";
+import { stopBoss } from "@/lib/jobs/queue";
 import { runTriage } from "@/lib/triage/classify";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
 import { createImmichAsset } from "@/test/helpers/factories";
@@ -171,6 +173,47 @@ describeWithDb("Triage Classifier (runTriage)", () => {
 			fakeImmich.restore();
 		}
 	});
+
+	afterAll(async () => {
+		await stopBoss();
+	});
+
+	it.each([
+		["AI is disabled", featureDisabled("OpenRouter")],
+		["AI is paused", featureDisabled("AI (paused in settings)")],
+	])(
+		"defers an hour and keeps pending when %s (503), even on the last attempt",
+		async (_name, error) => {
+			const fakeImmich = installFakeImmich();
+			const fake = fakeAsset();
+			fakeImmich.add(fake);
+			const asset = await createImmichAsset({
+				immichId: fake.id,
+				triageStatus: "pending",
+			});
+			vi.spyOn(ai, "aiCall").mockRejectedValueOnce(error);
+
+			try {
+				await runTriage(asset.id, { isLastAttempt: true });
+
+				const updated = await db().immichAsset.findUnique({
+					where: { id: asset.id },
+				});
+				expect(updated?.triageStatus).toBe("pending");
+				expect(updated?.error).toBeNull();
+
+				const jobs = await db().$queryRaw<{ wait: number }[]>`
+				SELECT EXTRACT(EPOCH FROM (start_after - now()))::float AS wait
+				FROM pgboss.job
+				WHERE name = 'triage.classify' AND data->>'immichAssetId' = ${asset.id}`;
+				expect(jobs).toHaveLength(1);
+				expect(jobs[0]?.wait).toBeGreaterThan(3500);
+				expect(jobs[0]?.wait).toBeLessThanOrEqual(3600);
+			} finally {
+				fakeImmich.restore();
+			}
+		},
+	);
 
 	it("keeps pending on BudgetExceededError without failing", async () => {
 		const fakeImmich = installFakeImmich();
