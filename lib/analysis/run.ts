@@ -38,6 +38,11 @@ export async function runMemeAnalysis(
 		if (!existing) {
 			throw new PermanentJobError(`Analysis not found: ${analysisId}`);
 		}
+		// A duplicate or retried delivery for a finished analysis must not pay
+		// for (or apply) a second model call.
+		if (existing.status === "done") {
+			return presentAnalysis(existing);
+		}
 		analysis = existing;
 	} else {
 		const existing = await db().analysis.findFirst({

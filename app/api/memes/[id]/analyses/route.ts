@@ -43,24 +43,28 @@ export const POST = withAuth<RouteParams<{ id: string }>>(
 		}
 
 		// kind: "meme"
-		const existing = await db().analysis.findFirst({
-			where: {
-				memeId,
-				kind: "meme",
-				status: { in: ["queued", "running"] },
-			},
-		});
-		if (existing) {
-			throw conflict("Meme analysis is already queued or running");
-		}
-
-		const analysis = await db().analysis.create({
-			data: {
-				memeId,
-				kind: "meme",
-				status: "queued",
-				model: env().OPENROUTER_ANALYSIS_MODEL,
-			},
+		// Serialise concurrent requests per meme: without the lock, two
+		// simultaneous POSTs both pass the check and queue two paid analyses.
+		const analysis = await db().$transaction(async (tx) => {
+			await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`analysis.meme:${memeId}`}, 0))`;
+			const existing = await tx.analysis.findFirst({
+				where: {
+					memeId,
+					kind: "meme",
+					status: { in: ["queued", "running"] },
+				},
+			});
+			if (existing) {
+				throw conflict("Meme analysis is already queued or running");
+			}
+			return tx.analysis.create({
+				data: {
+					memeId,
+					kind: "meme",
+					status: "queued",
+					model: env().OPENROUTER_ANALYSIS_MODEL,
+				},
+			});
 		});
 
 		await enqueue(analysisMeme, { memeId, analysisId: analysis.id });

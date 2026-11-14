@@ -255,3 +255,70 @@ describeWithDb("Triage Classifier (runTriage)", () => {
 		}
 	});
 });
+
+describeWithDb("runTriage: decisions made while the model runs", () => {
+	beforeEach(async () => {
+		await resetDb();
+		vi.restoreAllMocks();
+	});
+
+	it("does not overwrite a rejection made during the AI call", async () => {
+		const fakeImmich = installFakeImmich();
+		const fake = fakeAsset();
+		fakeImmich.add(fake);
+		const asset = await createImmichAsset({
+			immichId: fake.id,
+			triageStatus: "pending",
+		});
+		vi.spyOn(ai, "aiCall").mockImplementationOnce(async () => {
+			await db().immichAsset.update({
+				where: { id: asset.id },
+				data: { triageStatus: "rejected" },
+			});
+			return {
+				model: "m",
+				content: JSON.stringify({
+					memeProbability: 0.9,
+					kind: "meme",
+					reason: "r",
+				}),
+				citations: [],
+			};
+		});
+		try {
+			await runTriage(asset.id);
+			const row = await db().immichAsset.findUnique({
+				where: { id: asset.id },
+			});
+			expect(row?.triageStatus).toBe("rejected");
+		} finally {
+			fakeImmich.restore();
+		}
+	});
+
+	it("sets error on the last attempt when the model returns schema-invalid JSON", async () => {
+		const fakeImmich = installFakeImmich();
+		const fake = fakeAsset();
+		fakeImmich.add(fake);
+		const asset = await createImmichAsset({
+			immichId: fake.id,
+			triageStatus: "pending",
+		});
+		vi.spyOn(ai, "aiCall").mockResolvedValueOnce({
+			model: "m",
+			content: JSON.stringify({ kind: "meme" }),
+			citations: [],
+		});
+		try {
+			await expect(
+				runTriage(asset.id, { isLastAttempt: true }),
+			).rejects.toThrow();
+			const row = await db().immichAsset.findUnique({
+				where: { id: asset.id },
+			});
+			expect(row?.triageStatus).toBe("error");
+		} finally {
+			fakeImmich.restore();
+		}
+	});
+});

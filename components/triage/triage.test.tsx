@@ -207,6 +207,38 @@ describe("TriageView component", () => {
 		);
 		expect(postCalls).toHaveLength(0);
 
+		// Even after the undo window would have elapsed, nothing is sent.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+		expect(
+			api.mock.calls.filter(([, init]) => init?.method === "POST"),
+		).toHaveLength(0);
+
+		vi.useRealTimers();
+	});
+
+	it("sends exactly one decisions POST after the undo window", async () => {
+		vi.useFakeTimers();
+		const api = mockApi({
+			"GET /api/triage": { items: [candidate1, candidate2], nextCursor: null },
+			"POST /api/triage/decisions": { accepted: 1, rejected: 0 },
+		});
+		renderWithQuery(<TriageView isAdmin={false} />);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(100);
+		});
+		act(() => {
+			fireEvent.keyDown(window, { key: "a" });
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5100);
+		});
+		const posts = api.mock.calls.filter(([, init]) => init?.method === "POST");
+		expect(posts).toHaveLength(1);
+		expect(JSON.parse(String(posts[0]?.[1]?.body))).toEqual({
+			decisions: [{ immichAssetId: candidate1.id, decision: "accept" }],
+		});
 		vi.useRealTimers();
 	});
 

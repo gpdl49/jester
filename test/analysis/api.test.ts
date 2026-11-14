@@ -118,6 +118,22 @@ describeWithDb("POST /api/memes/[id]/analyses", () => {
 		expect(body.error).toBe("conflict");
 	});
 
+	it("concurrent requests create only one queued analysis", async () => {
+		const meme = await createMeme();
+		const send = () =>
+			POST(
+				apiRequest(`/api/memes/${meme.id}/analyses`, {
+					method: "POST",
+					body: { kind: "meme" },
+				}),
+				routeParams({ id: meme.id }),
+			);
+		const results = await Promise.all([send(), send(), send()]);
+		expect(results.map((r) => r.status).sort()).toEqual([202, 409, 409]);
+		expect(await db().analysis.count({ where: { memeId: meme.id } })).toBe(1);
+		expect(enqueueSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("creates Analysis and enqueues analysis.meme, returning 202", async () => {
 		const meme = await createMeme();
 

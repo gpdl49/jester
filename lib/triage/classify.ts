@@ -17,6 +17,9 @@ import { getSetting } from "@/lib/settings";
 import { triageResultSchema } from "./schema";
 import { acceptAsset } from "./service";
 
+/** States a classification may still write to; decided assets are never touched. */
+const CLASSIFIABLE = ["unscored", "pending", "scored", "error"] as const;
+
 const TRIAGE_JSON_SCHEMA = {
 	type: "object",
 	properties: {
@@ -83,8 +86,8 @@ async function handleGeneralError(
 
 	if (isLastAttempt) {
 		const message = err instanceof Error ? err.message : String(err);
-		await db().immichAsset.update({
-			where: { id: immichAssetId },
+		await db().immichAsset.updateMany({
+			where: { id: immichAssetId, triageStatus: { in: [...CLASSIFIABLE] } },
 			data: {
 				triageStatus: "error",
 				error: message,
@@ -118,8 +121,8 @@ export async function runTriage(
 		thumbnail = await immich().getThumbnail(asset.immichId, "preview");
 	} catch (err) {
 		if ((err as { status?: number }).status === 404) {
-			await db().immichAsset.update({
-				where: { id: immichAssetId },
+			await db().immichAsset.updateMany({
+				where: { id: immichAssetId, triageStatus: { in: [...CLASSIFIABLE] } },
 				data: {
 					triageStatus: "error",
 					error: "gone",
@@ -160,8 +163,8 @@ export async function runTriage(
 		});
 	} catch (err) {
 		if (err instanceof BudgetExceededError) {
-			await db().immichAsset.update({
-				where: { id: immichAssetId },
+			await db().immichAsset.updateMany({
+				where: { id: immichAssetId, triageStatus: { in: [...CLASSIFIABLE] } },
 				data: {
 					triageStatus: "pending",
 				},
@@ -188,15 +191,24 @@ export async function runTriage(
 		throw parseError;
 	}
 
-	const validated = triageResultSchema.parse(parsed);
+	const parsedResult = triageResultSchema.safeParse(parsed);
+	if (!parsedResult.success) {
+		const schemaError = new Error(
+			`Invalid triage result: ${parsedResult.error.message}`,
+		);
+		await handleGeneralError(immichAssetId, schemaError, options);
+		throw schemaError;
+	}
+	const validated = parsedResult.data;
 	const probability = Math.max(0, Math.min(1, validated.memeProbability));
 	const triageResult: TriageResult = {
 		...validated,
 		memeProbability: probability,
 	};
 
-	await db().immichAsset.update({
-		where: { id: immichAssetId },
+	// Don't clobber a decision made while the model was running.
+	const { count } = await db().immichAsset.updateMany({
+		where: { id: immichAssetId, triageStatus: { in: [...CLASSIFIABLE] } },
 		data: {
 			memeProbability: probability,
 			triageModel: response.model,
@@ -218,7 +230,14 @@ export async function runTriage(
 	});
 
 	const autoAcceptThreshold = await getSetting("triage.autoAcceptThreshold");
-	if (autoAcceptThreshold !== null && probability >= autoAcceptThreshold) {
-		await acceptAsset(asset.id, null);
+	if (
+		count === 1 &&
+		autoAcceptThreshold !== null &&
+		probability >= autoAcceptThreshold
+	) {
+		await acceptAsset(asset.id, null).catch((err) => {
+			// Decided by a person in the meantime: their decision stands.
+			if ((err as { status?: number }).status !== 409) throw err;
+		});
 	}
 }
