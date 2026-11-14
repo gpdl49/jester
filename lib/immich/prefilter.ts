@@ -50,8 +50,11 @@ export function scorePrefilter(
 	const signals: PrefilterSignals = {};
 
 	// 1. MIME type: PNG, WebP or GIF (+0.30)
-	const mimeString = (asset.mimeType || asset.originalMimeType || "")
-		.toLowerCase();
+	const mimeString = (
+		asset.mimeType ||
+		asset.originalMimeType ||
+		""
+	).toLowerCase();
 	const parts = mimeString.split(";");
 	const rawMime = parts[0]?.trim() ?? "";
 	if (
