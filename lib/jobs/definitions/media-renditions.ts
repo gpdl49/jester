@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { defineJob } from "@/lib/jobs/define";
+import { generateRenditions } from "@/lib/media/renditions";
 
 /**
  * `media.renditions` (docs/memes.md "Jobs"). Owned by the `media` slice: replace the
@@ -10,7 +11,7 @@ export const mediaRenditions = defineJob({
 	schema: z.object({ memeId: z.uuid() }),
 	concurrency: 2,
 	queue: { retryLimit: 3, retryDelay: 30 },
-	handler: async (_data) => {
-		throw new PermanentJobError("media.renditions: not implemented");
+	handler: async (data) => {
+		await generateRenditions(data.memeId);
 	},
 });
