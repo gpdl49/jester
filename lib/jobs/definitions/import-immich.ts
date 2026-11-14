@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { defineJob } from "@/lib/jobs/define";
+import { importFromImmich } from "@/lib/media/import";
 
 /**
  * `import.immich` (docs/memes.md "Jobs"). Owned by the `media` slice: replace the
@@ -10,7 +11,7 @@ export const importImmich = defineJob({
 	schema: z.object({ immichAssetId: z.uuid() }),
 	concurrency: 2,
 	queue: { retryLimit: 3, retryDelay: 60, retryBackoff: true },
-	handler: async (_data) => {
-		throw new PermanentJobError("import.immich: not implemented");
+	handler: async (data) => {
+		await importFromImmich(data.immichAssetId);
 	},
 });

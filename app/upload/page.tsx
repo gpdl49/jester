@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { PageHeader, Placeholder } from "@/components/page-header";
+import { PageHeader } from "@/components/page-header";
+import { UploadView } from "@/components/upload/upload-view";
 
 export const metadata: Metadata = { title: "Upload" };
 
@@ -8,7 +9,7 @@ export default function Page() {
 	return (
 		<>
 			<PageHeader title="Upload" />
-			<Placeholder>Not built yet.</Placeholder>
+			<UploadView />
 		</>
 	);
 }

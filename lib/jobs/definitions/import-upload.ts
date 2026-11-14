@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { defineJob } from "@/lib/jobs/define";
+import { importFromUpload } from "@/lib/media/import";
 
 /**
  * `import.upload` (docs/memes.md "Jobs"). Owned by the `media` slice: replace the
@@ -9,7 +10,7 @@ export const importUpload = defineJob({
 	name: "import.upload",
 	schema: z.object({ uploadId: z.uuid() }),
 	queue: { retryLimit: 3, retryDelay: 30, retryBackoff: true },
-	handler: async (_data) => {
-		throw new PermanentJobError("import.upload: not implemented");
+	handler: async (data) => {
+		await importFromUpload(data.uploadId);
 	},
 });
