@@ -43,7 +43,7 @@ export async function renderCaption(
 	const allHashtags: string[] = [];
 
 	for (const item of post.items) {
-		if (item.meme.creditText && item.meme.creditText.trim()) {
+		if (item.meme.creditText?.trim()) {
 			credits.push(`📸 ${item.meme.creditText.trim()}`);
 		}
 		for (const tag of item.meme.hashtags) {

@@ -34,6 +34,8 @@ describe("instagram crypto", () => {
 
 	it("fails when payload is too short", () => {
 		const invalid = Buffer.from("short").toString("base64");
-		expect(() => decrypt(invalid, testKey)).toThrow("Invalid encrypted token length");
+		expect(() => decrypt(invalid, testKey)).toThrow(
+			"Invalid encrypted token length",
+		);
 	});
 });

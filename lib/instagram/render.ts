@@ -1,12 +1,6 @@
 import sharp from "sharp";
 import { db } from "@/lib/db";
-import {
-	extensionFor,
-	getObjectBytes,
-	instagramKey,
-	memeKey,
-	putObject,
-} from "@/lib/s3";
+import { getObjectBytes, instagramKey, memeKey, putObject } from "@/lib/s3";
 
 export const MIN_ASPECT_RATIO = 4 / 5; // 0.8
 export const MAX_ASPECT_RATIO = 1.91; // 1.91:1
