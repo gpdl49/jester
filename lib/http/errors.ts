@@ -110,7 +110,8 @@ export function toErrorBody(err: unknown): { status: number; body: ErrorBody } {
 
 export function errorResponse(err: unknown): Response {
 	const { status, body } = toErrorBody(err);
-	if (status >= 500) {
+	// An expected "feature not configured" 503 is not worth a stack trace.
+	if (status >= 500 && !(err instanceof ApiError && status === 503)) {
 		console.error("Unhandled API error", err);
 	}
 	return Response.json(body, { status });
