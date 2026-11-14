@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { runDelete } from "@/lib/immich/delete";
+import { defineJob } from "@/lib/jobs/define";
 
 /**
  * `immich.delete` (docs/memes.md "Jobs"). Owned by the `immich` slice: replace the
@@ -9,7 +10,7 @@ export const immichDelete = defineJob({
 	name: "immich.delete",
 	schema: z.object({ immichAssetId: z.uuid() }),
 	queue: { retryLimit: 5, retryDelay: 60, retryBackoff: true },
-	handler: async (_data) => {
-		throw new PermanentJobError("immich.delete: not implemented");
+	handler: async (data) => {
+		await runDelete(data.immichAssetId);
 	},
 });
