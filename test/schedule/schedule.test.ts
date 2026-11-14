@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { GET as getPreviewHandler } from "@/app/api/schedule/preview/route";
 import {
 	GET as getSlotsHandler,
@@ -124,9 +124,8 @@ describeWithDb("schedule API and scheduler tick", () => {
 		// Check p1 got assigned a slot in the future
 		const reloadedP1 = await db().post.findUnique({ where: { id: p1.id } });
 		expect(reloadedP1?.scheduledAt).not.toBeNull();
-		expect(reloadedP1?.scheduledAt!.getTime()).toBeGreaterThan(
-			fixedNow.getTime(),
-		);
+		const scheduledTime = reloadedP1?.scheduledAt?.getTime() ?? 0;
+		expect(scheduledTime).toBeGreaterThan(fixedNow.getTime());
 
 		// Check p2 was enqueued with singletonKey: p2.id
 		expect(mockEnqueue).toHaveBeenCalledWith(

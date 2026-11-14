@@ -1,8 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { GET as getPostHandler, PATCH as patchPostHandler } from "@/app/api/posts/[id]/route";
+import { beforeEach, expect, it } from "vitest";
 import { POST as publishNowHandler } from "@/app/api/posts/[id]/publish-now/route";
+import {
+	GET as getPostHandler,
+	PATCH as patchPostHandler,
+} from "@/app/api/posts/[id]/route";
 import { POST as reorderPostsHandler } from "@/app/api/posts/reorder/route";
-import { GET as listPostsHandler, POST as createPostHandler } from "@/app/api/posts/route";
+import {
+	POST as createPostHandler,
+	GET as listPostsHandler,
+} from "@/app/api/posts/route";
 import type { PostDetailDto, PostSummaryDto } from "@/lib/api/types";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
 import { createMeme, createPost } from "@/test/helpers/factories";
@@ -61,9 +67,10 @@ describeWithDb("posts HTTP API", () => {
 		const res = await listPostsHandler(req, {});
 		expect(res.status).toBe(200);
 
-		const data = await json<{ items: PostSummaryDto[]; nextCursor: string | null }>(
-			res,
-		);
+		const data = await json<{
+			items: PostSummaryDto[];
+			nextCursor: string | null;
+		}>(res);
 		expect(data.items).toHaveLength(1);
 		expect(data.items[0]?.status).toBe("queued");
 	});

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 import type { PostSummaryDto } from "@/lib/api/types";
 import { renderWithQuery } from "@/test/helpers/dom";
 import { QueueList } from "./queue-list";

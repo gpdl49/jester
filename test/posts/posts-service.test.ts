@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { ApiError } from "@/lib/http/errors";
 import {
@@ -9,10 +9,7 @@ import {
 	reorderPosts,
 } from "@/lib/posts/service";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
-import {
-	createInstagramAccount,
-	createMeme,
-} from "@/test/helpers/factories";
+import { createMeme } from "@/test/helpers/factories";
 import { userId } from "@/test/helpers/users";
 
 describeWithDb("posts service", () => {
@@ -61,9 +58,7 @@ describeWithDb("posts service", () => {
 		const m1 = await createMeme({ status: "approved" });
 		const m2 = await createMeme({ status: "inbox" }); // not approved
 
-		await expect(
-			createPost({ memeIds: [m1.id, m2.id] }),
-		).rejects.toSatisfy(
+		await expect(createPost({ memeIds: [m1.id, m2.id] })).rejects.toSatisfy(
 			(err: unknown) =>
 				err instanceof ApiError &&
 				err.status === 422 &&
