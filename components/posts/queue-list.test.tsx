@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { PostSummaryDto } from "@/lib/api/types";
-import { renderWithQuery } from "@/test/helpers/dom";
+import { mockApi, renderWithQuery, requests } from "@/test/helpers/dom";
 import { QueueList } from "./queue-list";
 
 describe("QueueList component", () => {
@@ -79,5 +79,44 @@ describe("QueueList component", () => {
 
 		expect(screen.getByText(/No posts in the queue/i)).toBeInTheDocument();
 		expect(screen.getByText(/No drafts saved/i)).toBeInTheDocument();
+	});
+
+	it("publish now calls the endpoint and marks the card publishing only on success", async () => {
+		const fetch = mockApi({
+			"POST /api/posts/post-1/publish-now": { id: "post-1" },
+		});
+		renderWithQuery(<QueueList queuedPosts={sampleQueued} draftPosts={[]} />);
+
+		fireEvent.click(screen.getAllByText("Publish now")[0] as HTMLElement);
+
+		await screen.findByText(/publishing/i);
+		expect(requests(fetch)[0]).toMatchObject({
+			method: "POST",
+			path: "/api/posts/post-1/publish-now",
+		});
+	});
+
+	it("shows the API error and keeps the card when publish now or cancel is refused with 409", async () => {
+		mockApi({
+			"POST /api/posts/post-1/publish-now": Response.json(
+				{ error: "conflict", message: "Post is already being published" },
+				{ status: 409 },
+			),
+			"PATCH /api/posts/post-1": Response.json(
+				{ error: "conflict", message: "Cannot edit once publishing" },
+				{ status: 409 },
+			),
+		});
+		renderWithQuery(<QueueList queuedPosts={sampleQueued} draftPosts={[]} />);
+
+		fireEvent.click(screen.getAllByText("Publish now")[0] as HTMLElement);
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"already being published",
+		);
+		expect(screen.queryByText(/^publishing$/i)).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getAllByText("Cancel")[0] as HTMLElement);
+		await screen.findByText(/Cannot edit once publishing/);
+		expect(screen.getByText("First queued post")).toBeInTheDocument();
 	});
 });

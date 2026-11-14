@@ -17,9 +17,12 @@ import {
 	verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { PostSummaryDto } from "@/lib/api/types";
+import { api } from "@/lib/client/api";
 import { useReorderPosts } from "@/lib/client/posts";
+import { queryKeys } from "@/lib/client/queries";
 import { QueueCard } from "./queue-card";
 
 function SortableQueueItem({
@@ -73,32 +76,43 @@ export function QueueList({
 }: QueueListProps) {
 	const [queued, setQueued] = useState<PostSummaryDto[]>(initialQueued);
 	const reorderMutation = useReorderPosts();
+	const queryClient = useQueryClient();
+	const [error, setError] = useState<string | null>(null);
+	const refresh = () => {
+		queryClient.invalidateQueries({ queryKey: queryKeys.posts });
+		queryClient.invalidateQueries({ queryKey: queryKeys.stats });
+	};
 
 	useEffect(() => {
 		setQueued(initialQueued);
 	}, [initialQueued]);
 
 	const handlePublishNow = async (id: string) => {
+		setError(null);
 		try {
-			await fetch(`/api/posts/${id}/publish-now`, { method: "POST" });
+			// api throws on non-2xx (e.g. 409 once the post is already publishing)
+			await api.post(`/posts/${api.enc(id)}/publish-now`);
 			setQueued((prev) =>
 				prev.map((p) => (p.id === id ? { ...p, status: "publishing" } : p)),
 			);
 		} catch (e) {
 			console.error("Publish now failed", e);
+			setError(e instanceof Error ? e.message : "Publish now failed");
+		} finally {
+			refresh();
 		}
 	};
 
 	const handleCancel = async (id: string) => {
+		setError(null);
 		try {
-			await fetch(`/api/posts/${id}`, {
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ status: "cancelled" }),
-			});
+			await api.patch(`/posts/${api.enc(id)}`, { status: "cancelled" });
 			setQueued((prev) => prev.filter((p) => p.id !== id));
 		} catch (e) {
 			console.error("Cancel post failed", e);
+			setError(e instanceof Error ? e.message : "Cancel failed");
+		} finally {
+			refresh();
 		}
 	};
 
@@ -137,6 +151,14 @@ export function QueueList({
 
 	return (
 		<div className="space-y-8">
+			{error && (
+				<div
+					role="alert"
+					className="rounded-lg border border-red-500/40 p-3 text-sm text-red-500"
+				>
+					{error}
+				</div>
+			)}
 			{/* Queued Section */}
 			<section className="space-y-3">
 				<div className="flex items-center justify-between">
