@@ -251,6 +251,23 @@ The foundation (`F`) lands on `main` first and holds every shared contract: the 
 | `admin` | `lib/settings/**`, `lib/audit/**` (the `audit()` writer used by all slices is in F), `/api/settings`, `/api/audit`, `/api/ai/usage`, `/api/stats` (except the sync fields), `app/page.tsx` (dashboard), `app/settings/**`, `app/activity/**` | settings validation and defaults; admin gating; stats aggregation |
 | `infra` (Codex, in homestacks) | everything under Layout below, plus `docs/README.md` and the Renovate exclusion for the private submodule | `kustomize build` for every touched Kustomization; hk hooks; `tofu validate` in `terraform/openrouter` |
 
+### Cross-slice exports
+
+Modules one slice writes and another calls. A slice that needs one before it is merged creates a minimal version with exactly this signature and says so in its report.
+
+| Export | Owner | Used by |
+|--------|-------|---------|
+| `syncStats(): Promise<DashboardStatsDto["sync"]>` in `lib/immich/stats.ts` | immich | admin |
+| `requestAttribution(memeId, actorId): Promise<AnalysisDto>` in `lib/attribution/request.ts` | attribution | analysis, library |
+| `getMemeDetail(id): Promise<MemeDetailDto>` in `lib/memes/service.ts` | library | attribution |
+| `presentAnalysis(row): AnalysisDto` in `lib/analysis/present.ts` | analysis | library |
+| `renderCaption(post): Promise<{text, warnings}>` in `lib/posts/caption.ts` | posts | instagram |
+| `AttributionPanel({meme})` in `components/attribution/attribution-panel.tsx` | attribution | library |
+| `InstagramAccounts()` in `components/instagram/instagram-accounts.tsx` | instagram | admin |
+| `ScheduleSlotsEditor()` in `components/schedule/schedule-slots-editor.tsx` | posts | admin |
+
+Also in the instagram slice: `POST /api/instagram/accounts/{id}/default` (admin) makes an account the default.
+
 Every slice runs `pnpm lint && pnpm typecheck && pnpm test && pnpm build` before reporting, and adds tests next to its code (`lib/**/*.test.ts`) and in `test/` for database, API and S3 tests.
 
 ## Layout in this repo
