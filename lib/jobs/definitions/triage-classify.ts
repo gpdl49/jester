@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { defineJob } from "@/lib/jobs/define";
 
 /**
  * `triage.classify` (docs/memes.md "Jobs"). Owned by the `triage` slice: replace the
@@ -10,7 +10,11 @@ export const triageClassify = defineJob({
 	schema: z.object({ immichAssetId: z.uuid() }),
 	concurrency: 4,
 	queue: { retryLimit: 2, retryDelay: 30, retryBackoff: true },
-	handler: async (_data) => {
-		throw new PermanentJobError("triage.classify: not implemented");
+	handler: async ({ immichAssetId }, job) => {
+		const { runTriage } = await import("@/lib/triage/classify");
+		const retryCount =
+			(job as { retryCount?: number } | undefined)?.retryCount ?? 0;
+		const retryLimit = triageClassify.queue?.retryLimit ?? 2;
+		await runTriage(immichAssetId, { retryCount, retryLimit });
 	},
 });
