@@ -25,18 +25,56 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 		return;
 	}
 
-	const meme = asset.meme;
+	// A duplicate whose meme already belongs to another asset cannot be linked
+	// (ImmichAsset.memeId is unique); import leaves a pending ImmichDeletion row
+	// with the meme and the SHA-256 of the bytes it downloaded from this asset.
+	const pending = asset.meme
+		? null
+		: await db().immichDeletion.findFirst({
+				where: {
+					immichAssetId: asset.id,
+					status: { in: ["pending", "skipped", "failed"] },
+					memeId: { not: null },
+				},
+				orderBy: { at: "desc" },
+				include: { meme: true },
+			});
+	const meme = asset.meme ?? pending?.meme ?? null;
+
+	// Record the outcome on the pending row when there is one, else a new row.
+	const record = (
+		status: "done" | "skipped" | "failed",
+		data: {
+			memeId: string | null;
+			verifiedSha256?: string | null;
+			error?: string;
+		},
+		tx: Pick<ReturnType<typeof db>, "immichDeletion"> = db(),
+	) =>
+		pending
+			? tx.immichDeletion.update({
+					where: { id: pending.id },
+					// Keep the link's own hash: a failed check must not overwrite the
+					// evidence the retry compares against.
+					data: {
+						status,
+						...data,
+						...(status === "failed" ? { verifiedSha256: undefined } : {}),
+						at: new Date(),
+					},
+				})
+			: tx.immichDeletion.create({
+					data: {
+						immichAssetId: asset.id,
+						immichId: asset.immichId,
+						status,
+						...data,
+					},
+				});
+
 	if (!meme) {
 		const errorMsg = `No associated meme for asset ${immichAssetId}`;
-		await db().immichDeletion.create({
-			data: {
-				immichAssetId: asset.id,
-				immichId: asset.immichId,
-				memeId: null,
-				status: "failed",
-				error: errorMsg,
-			},
-		});
+		await record("failed", { memeId: null, error: errorMsg });
 		throw new PermanentJobError(errorMsg);
 	}
 
@@ -48,26 +86,27 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 
 	const sizeMatches = head != null && head.size === meme.size;
 	const shaMatches = head != null && head.sha256 === expectedSha256Base64;
+	// For an unlinked duplicate: the bytes that came out of Immich must be the
+	// meme's bytes.
+	const linkMatches =
+		!pending || pending.verifiedSha256 === expectedSha256Base64;
 
-	if (!head || !sizeMatches || !shaMatches) {
+	if (!head || !sizeMatches || !shaMatches || !linkMatches) {
 		let errorMsg = "S3 verification failed: ";
 		if (!head) {
 			errorMsg += "original object missing in S3";
 		} else if (!sizeMatches) {
 			errorMsg += `size mismatch (S3: ${head.size}, Meme: ${meme.size})`;
-		} else {
+		} else if (!shaMatches) {
 			errorMsg += `checksum mismatch (S3: ${head.sha256}, expected: ${expectedSha256Base64})`;
+		} else {
+			errorMsg += "downloaded bytes do not match the linked meme";
 		}
 
-		await db().immichDeletion.create({
-			data: {
-				immichAssetId: asset.id,
-				immichId: asset.immichId,
-				memeId: meme.id,
-				status: "failed",
-				verifiedSha256: head?.sha256 ?? null,
-				error: errorMsg,
-			},
+		await record("failed", {
+			memeId: meme.id,
+			verifiedSha256: head?.sha256 ?? null,
+			error: errorMsg,
 		});
 		throw new PermanentJobError(errorMsg);
 	}
@@ -75,15 +114,7 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 	// Honor feature switch and pause setting
 	const deletePaused = await getSetting("immich.deletePaused");
 	if (!features().immichDelete || deletePaused) {
-		await db().immichDeletion.create({
-			data: {
-				immichAssetId: asset.id,
-				immichId: asset.immichId,
-				memeId: meme.id,
-				status: "skipped",
-				verifiedSha256: head.sha256,
-			},
-		});
+		await record("skipped", { memeId: meme.id, verifiedSha256: head.sha256 });
 		return;
 	}
 
@@ -96,15 +127,7 @@ export async function runDelete(immichAssetId: string): Promise<void> {
 			data: { triageStatus: "deleted" },
 		});
 
-		await tx.immichDeletion.create({
-			data: {
-				immichAssetId: asset.id,
-				immichId: asset.immichId,
-				memeId: meme.id,
-				status: "done",
-				verifiedSha256: head.sha256,
-			},
-		});
+		await record("done", { memeId: meme.id, verifiedSha256: head.sha256 }, tx);
 
 		await audit(
 			{

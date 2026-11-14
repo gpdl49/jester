@@ -10,16 +10,54 @@ import { analysisMeme } from "@/lib/jobs/definitions/analysis-meme";
 import { immichDelete } from "@/lib/jobs/definitions/immich-delete";
 import { mediaRenditions } from "@/lib/jobs/definitions/media-renditions";
 import { enqueue } from "@/lib/jobs/queue";
+import { generateRenditions } from "@/lib/media/renditions";
 import {
 	deleteObjects,
 	getObjectBytes,
 	headObject,
+	MAX_UPLOAD_BYTES,
 	memeKey,
 	putObject,
 	uploadKey,
 } from "@/lib/s3";
 
 const MAX_IMPORT_BYTES = 100 * 1024 * 1024; // 100 MiB limit
+
+/**
+ * Makes sure `media/<memeId>/original.<ext>` holds exactly `meme`'s bytes:
+ * HeadObject must report the meme's size and SHA-256, otherwise the bytes (which
+ * the caller has already hashed) are written again and verified. This repairs a
+ * meme row left behind by an import that failed between the DB insert and the
+ * S3 write, so a retry never links an asset or upload to a meme without bytes.
+ * Returns true when it (re)wrote the object.
+ */
+async function ensureOriginalInS3(
+	meme: { id: string; contentType: string; size: number; sha256: string },
+	loadBytes: () => Promise<Uint8Array>,
+): Promise<boolean> {
+	const key = memeKey(meme.id, "original", meme.contentType);
+	const sha256Base64 = Buffer.from(meme.sha256, "hex").toString("base64");
+	const matches = (head: { size: number; sha256: string | undefined } | null) =>
+		head != null && head.size === meme.size && head.sha256 === sha256Base64;
+
+	if (matches(await headObject(key))) {
+		return false;
+	}
+	const bytes = await loadBytes();
+	if (bytes.byteLength !== meme.size) {
+		throw new Error(
+			`Cannot repair ${key}: have ${bytes.byteLength} bytes, meme has ${meme.size}`,
+		);
+	}
+	await putObject(key, bytes, meme.contentType, { sha256Base64 });
+	if (!matches(await headObject(key))) {
+		throw new Error(`S3 verification failed for ${key}`);
+	}
+	return true;
+}
+
+const isHeic = (contentType: string) =>
+	contentType === "image/heic" || contentType === "image/heif";
 
 /**
  * Imports an accepted Immich asset into the app:
@@ -41,9 +79,28 @@ export async function importFromImmich(
 	}
 
 	// Idempotent no-op for already imported asset
-	if (asset.triageStatus === "imported" && asset.memeId) {
-		await enqueue(immichDelete, { immichAssetId: asset.id });
-		return { memeId: asset.memeId };
+	if (asset.triageStatus === "imported") {
+		if (asset.memeId) {
+			await enqueue(immichDelete, { immichAssetId: asset.id });
+			return { memeId: asset.memeId };
+		}
+		// A duplicate whose meme already belongs to another asset is tracked by a
+		// pending ImmichDeletion row (see below).
+		const pending = await db().immichDeletion.findFirst({
+			where: {
+				immichAssetId: asset.id,
+				status: { in: ["pending", "skipped", "failed"] },
+				memeId: { not: null },
+			},
+			orderBy: { at: "desc" },
+		});
+		if (pending?.memeId) {
+			await enqueue(immichDelete, { immichAssetId: asset.id });
+			return { memeId: pending.memeId };
+		}
+		throw new PermanentJobError(
+			`Immich asset ${immichAssetId} is imported but not linked to a meme`,
+		);
 	}
 
 	if (asset.triageStatus !== "accepted") {
@@ -58,20 +115,35 @@ export async function importFromImmich(
 	);
 
 	try {
-		const { body, contentType } = await immich().downloadOriginal(
-			asset.immichId,
-		);
+		const {
+			body,
+			contentType,
+			size: declaredSize,
+		} = await immich().downloadOriginal(asset.immichId);
+		if (declaredSize != null && declaredSize > MAX_IMPORT_BYTES) {
+			await body.cancel().catch(() => {});
+			throw new PermanentJobError("Asset exceeds 100 MiB limit");
+		}
 		const writeStream = fs.createWriteStream(tmpPath);
+		let writeError: Error | null = null;
+		writeStream.on("error", (err) => {
+			writeError = err;
+		});
 		const sha1 = createHash("sha1");
 		const sha256 = createHash("sha256");
 		let totalBytes = 0;
 
 		const reader = body.getReader();
+		let finished = false;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) {
+					finished = true;
 					break;
+				}
+				if (writeError) {
+					throw writeError;
 				}
 				totalBytes += value.byteLength;
 				if (totalBytes > MAX_IMPORT_BYTES) {
@@ -81,17 +153,27 @@ export async function importFromImmich(
 				sha256.update(value);
 				if (!writeStream.write(value)) {
 					await new Promise<void>((resolve) => {
-						writeStream.once("drain", () => resolve());
+						const done = () => {
+							writeStream.off("drain", done);
+							writeStream.off("error", done);
+							resolve();
+						};
+						writeStream.on("drain", done);
+						writeStream.on("error", done);
 					});
 				}
 			}
 		} finally {
-			await new Promise<void>((resolve, reject) => {
-				writeStream.end((err?: Error | null) => {
-					if (err) reject(err);
-					else resolve();
-				});
+			if (!finished) {
+				// Size cap or write error: stop pulling from Immich.
+				await reader.cancel().catch(() => {});
+			}
+			await new Promise<void>((resolve) => {
+				writeStream.end(() => resolve());
 			});
+		}
+		if (writeError) {
+			throw writeError;
 		}
 
 		const sha1Base64 = sha1.digest("base64");
@@ -116,19 +198,58 @@ export async function importFromImmich(
 		});
 
 		if (existingMeme) {
-			const linkedAsset = await db().immichAsset.findFirst({
-				where: { memeId: existingMeme.id },
+			// The bytes are only "already safe in S3" if the existing meme's original
+			// is really there: verify it, and rewrite it from the verified download
+			// if a previous import died before the upload.
+			const repaired = await ensureOriginalInS3(existingMeme, () =>
+				fs.promises.readFile(tmpPath),
+			);
+
+			if (isHeic(existingMeme.contentType) && !existingMeme.renditionsReady) {
+				// Immich's fullsize JPEG is the rendition source; fetch it while the
+				// asset still exists.
+				await generateRenditions(existingMeme.id, {
+					immichId: asset.immichId,
+				});
+			}
+
+			// ImmichAsset.memeId is unique: a meme that already has an asset cannot be
+			// linked again. Then a pending ImmichDeletion row carries the link and the
+			// SHA-256 of the bytes downloaded from this asset, for immich.delete.
+			const otherAsset = await db().immichAsset.findFirst({
+				where: { memeId: existingMeme.id, id: { not: asset.id } },
 			});
+			if (otherAsset) {
+				const hasPending = await db().immichDeletion.findFirst({
+					where: {
+						immichAssetId: asset.id,
+						status: "pending",
+						memeId: existingMeme.id,
+					},
+				});
+				if (!hasPending) {
+					await db().immichDeletion.create({
+						data: {
+							immichAssetId: asset.id,
+							immichId: asset.immichId,
+							memeId: existingMeme.id,
+							status: "pending",
+							verifiedSha256: sha256Base64,
+						},
+					});
+				}
+			}
 			await db().immichAsset.update({
 				where: { id: asset.id },
 				data: {
 					triageStatus: "imported",
-					memeId:
-						linkedAsset && linkedAsset.id !== asset.id
-							? undefined
-							: existingMeme.id,
+					memeId: otherAsset ? undefined : existingMeme.id,
 				},
 			});
+			if (repaired) {
+				await enqueue(mediaRenditions, { memeId: existingMeme.id });
+				await enqueue(analysisMeme, { memeId: existingMeme.id });
+			}
 			await enqueue(immichDelete, { immichAssetId: asset.id });
 			return { memeId: existingMeme.id };
 		}
@@ -160,9 +281,15 @@ export async function importFromImmich(
 		if (
 			!verifiedHead ||
 			verifiedHead.size !== totalBytes ||
-			(verifiedHead.sha256 && verifiedHead.sha256 !== sha256Base64)
+			verifiedHead.sha256 !== sha256Base64
 		) {
 			throw new Error(`S3 verification failed for ${key}`);
+		}
+
+		if (isHeic(ct)) {
+			// Renditions come from Immich's fullsize JPEG, which is gone once
+			// immich.delete has run: make them before the delete is queued.
+			await generateRenditions(meme.id, { immichId: asset.immichId });
 		}
 
 		await db().immichAsset.update({
@@ -223,6 +350,19 @@ export async function importFromUpload(
 		throw new PermanentJobError(`Staging object ${stagingKey} not found in S3`);
 	}
 
+	// The presigned PUT does not bound the size and stays valid for 15 minutes:
+	// re-check what is actually in the bucket before reading it into memory.
+	if (head.size !== upload.size || head.size > MAX_UPLOAD_BYTES) {
+		await db().upload.update({
+			where: { id: upload.id },
+			data: { status: "failed", error: "Uploaded size mismatch" },
+		});
+		await deleteObjects([stagingKey]);
+		throw new PermanentJobError(
+			`Staging object ${stagingKey} is ${head.size} bytes, declared ${upload.size}`,
+		);
+	}
+
 	const fileBytes = await getObjectBytes(stagingKey);
 	const buffer = Buffer.from(fileBytes);
 
@@ -259,6 +399,10 @@ export async function importFromUpload(
 	});
 
 	if (existingMeme) {
+		// The staging object is about to be deleted: make sure the existing
+		// meme's original really holds these bytes (a failed earlier import may
+		// have left the row without its object).
+		const repaired = await ensureOriginalInS3(existingMeme, async () => buffer);
 		await db().upload.update({
 			where: { id: upload.id },
 			data: {
@@ -267,6 +411,10 @@ export async function importFromUpload(
 			},
 		});
 		await deleteObjects([stagingKey]);
+		if (repaired) {
+			await enqueue(mediaRenditions, { memeId: existingMeme.id });
+			await enqueue(analysisMeme, { memeId: existingMeme.id });
+		}
 		return { memeId: existingMeme.id };
 	}
 

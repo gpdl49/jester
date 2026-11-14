@@ -316,4 +316,57 @@ describeWithDb("runScan", () => {
 		expect(row?.prefilterScore).toBe(0.55);
 		expect(row?.triageStatus).toBe("unscored");
 	});
+
+	it("incremental: an asset tying with the cursor is not skipped", async () => {
+		await db().syncState.create({
+			data: {
+				id: "immich",
+				backfillDone: true,
+				smartDone: true,
+				cursor: "2026-11-14T10:00:00.000Z",
+			},
+		});
+		const tied = fakeAsset({
+			id: "a0000000-0000-0000-0000-000000000041",
+			updatedAt: "2026-11-14T10:00:00.000Z",
+		});
+		fakeImmich.add(tied);
+		await runScan();
+		expect(
+			await db().immichAsset.findUnique({ where: { immichId: tied.id } }),
+		).not.toBeNull();
+	});
+
+	it("smart search hits without EXIF are hydrated before scoring", async () => {
+		await db().setting.upsert({
+			where: { key: "immich.smartQueries" },
+			create: { key: "immich.smartQueries", value: ["funny"] },
+			update: { value: ["funny"] },
+		});
+		const photo = fakeAsset({
+			id: "a0000000-0000-0000-0000-000000000051",
+			originalFileName: "IMG_0001.JPG",
+			originalMimeType: "image/jpeg",
+			width: 4000,
+			height: 3000,
+			exifInfo: { make: "Apple", model: "iPhone" },
+			smartQueries: ["funny"],
+		});
+		// What smart search returned: no exifInfo at all.
+		const realSearch = fakeImmich.client.searchSmart;
+		fakeImmich.client.searchSmart = async (q) => {
+			const page = await realSearch(q);
+			return {
+				...page,
+				items: page.items.map(({ exifInfo: _e, ...rest }) => rest),
+			};
+		};
+		fakeImmich.add(photo);
+		await runScan();
+		const row = await db().immichAsset.findUniqueOrThrow({
+			where: { immichId: photo.id },
+		});
+		expect(row.cameraMake).toBe("Apple");
+		expect(row.prefilterSignals).not.toHaveProperty("noCamera");
+	});
 });
