@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { runMemeAnalysis } from "@/lib/analysis/run";
+import { defineJob } from "@/lib/jobs/define";
 
 /**
  * `analysis.meme` (docs/memes.md "Jobs"). Owned by the `analysis` slice: replace the
@@ -10,7 +11,7 @@ export const analysisMeme = defineJob({
 	schema: z.object({ memeId: z.uuid(), analysisId: z.uuid().optional() }),
 	concurrency: 3,
 	queue: { retryLimit: 1, retryDelay: 120 },
-	handler: async (_data) => {
-		throw new PermanentJobError("analysis.meme: not implemented");
+	handler: async ({ memeId, analysisId }) => {
+		await runMemeAnalysis(memeId, analysisId);
 	},
 });
