@@ -1,7 +1,13 @@
+import { z } from "zod";
 import type { SettingsDto } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { requireAdmin, type Viewer } from "@/lib/auth";
-import { getSettings, type SettingKey, setSettings } from "@/lib/settings";
+import {
+	getSettings,
+	type SettingKey,
+	settingSchemas,
+	setSettings,
+} from "@/lib/settings";
 
 export { defaultSettings, getSetting, getSettings } from "@/lib/settings";
 
@@ -19,6 +25,21 @@ export async function updateSettings(
 	actor: Viewer,
 ): Promise<SettingsDto> {
 	requireAdmin(actor);
+
+	// Own keys only: "constructor" or "toString" must be a 400, not a TypeError.
+	const unknown = Object.keys(patch).filter(
+		(key) => !Object.hasOwn(settingSchemas, key),
+	);
+	if (unknown.length > 0) {
+		throw new z.ZodError(
+			unknown.map((key) => ({
+				code: "custom" as const,
+				path: [key],
+				message: "Unknown setting",
+				input: (patch as Record<string, unknown>)[key],
+			})),
+		);
+	}
 
 	const oldSettings = await getSettings();
 	const updatedSettings = await setSettings(patch, actor.id);

@@ -3,7 +3,7 @@ import { listAuditEvents } from "@/lib/audit/list";
 import { parseQuery, withAuth } from "@/lib/http/handler";
 
 const querySchema = z.object({
-	cursor: z.string().optional(),
+	cursor: z.uuid().optional(),
 	action: z.string().optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional(),
 });

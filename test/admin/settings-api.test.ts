@@ -119,3 +119,23 @@ describeWithDb("settings API", () => {
 		expect(changes).toHaveProperty("publishing.paused");
 	});
 });
+
+describeWithDb("settings API: prototype keys", () => {
+	beforeEach(async () => {
+		await resetDb();
+	});
+
+	it.each([
+		"constructor",
+		"toString",
+	])("PATCH rejects the inherited key %s with 400, not 500", async (key) => {
+		const req = apiRequest("/api/settings", {
+			method: "PATCH",
+			user: ADMIN_USER,
+			body: `{"${key}": 1}`,
+		});
+		const res = await PATCH(req, routeParams({}));
+		expect(res.status).toBe(400);
+		expect((await json<{ error: string }>(res)).error).toBe("bad_request");
+	});
+});
