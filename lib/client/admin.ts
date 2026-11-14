@@ -45,7 +45,12 @@ export function useAuditEvents(params?: {
 	limit?: number;
 }) {
 	return useQuery({
-		queryKey: [...queryKeys.audit, params?.action, params?.cursor, params?.limit],
+		queryKey: [
+			...queryKeys.audit,
+			params?.action,
+			params?.cursor,
+			params?.limit,
+		],
 		queryFn: () =>
 			api.get<Paged<AuditEventDto>>("/audit", {
 				action: params?.action,

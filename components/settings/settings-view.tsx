@@ -1,7 +1,5 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
 import {
 	AlertTriangle,
 	Calendar,
@@ -14,15 +12,17 @@ import {
 	Sparkles,
 	Trash2,
 } from "lucide-react";
-import { useSettings, useUpdateSettings } from "@/lib/client/admin";
-import { useCurrentUser } from "@/lib/client/current-user";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm";
 import { ErrorText, Loading } from "@/components/ui/feedback";
 import { Field, Input, Textarea } from "@/components/ui/field";
+import type { SettingsDto } from "@/lib/api/types";
+import { useSettings, useUpdateSettings } from "@/lib/client/admin";
+import { useCurrentUser } from "@/lib/client/current-user";
 import { InstagramAccountsPlaceholder } from "./instagram-accounts-placeholder";
 import { ScheduleSlotsPlaceholder } from "./schedule-slots-placeholder";
-import type { SettingsDto } from "@/lib/api/types";
 
 export function SettingsView() {
 	const me = useCurrentUser();
@@ -43,7 +43,11 @@ export function SettingsView() {
 				<ShieldAlert className="mx-auto size-12 text-muted" />
 				<h2 className="mt-4 text-xl font-semibold text-fg">Admins only</h2>
 				<p className="mt-2 text-sm text-muted">
-					You need the <code className="rounded bg-sunken px-1.5 py-0.5 font-mono">memes-admin</code> group to view and change application settings.
+					You need the{" "}
+					<code className="rounded bg-sunken px-1.5 py-0.5 font-mono">
+						memes-admin
+					</code>{" "}
+					group to view and change application settings.
 				</p>
 			</div>
 		);
@@ -150,7 +154,9 @@ function TriageSection({
 	async function handleSave() {
 		await onUpdate({
 			"prefilter.threshold": prefilterThreshold,
-			"triage.autoAcceptThreshold": autoAcceptEnabled ? autoAcceptThreshold : null,
+			"triage.autoAcceptThreshold": autoAcceptEnabled
+				? autoAcceptThreshold
+				: null,
 		});
 		setSaved(true);
 		setTimeout(() => setSaved(false), 2000);
@@ -188,7 +194,9 @@ function TriageSection({
 						max={1}
 						step={0.05}
 						value={prefilterThreshold}
-						onChange={(e) => setPrefilterThreshold(Number.parseFloat(e.target.value))}
+						onChange={(e) =>
+							setPrefilterThreshold(Number.parseFloat(e.target.value))
+						}
 						className="w-full accent-accent cursor-pointer"
 					/>
 				</Field>
@@ -211,7 +219,11 @@ function TriageSection({
 							<div className="rounded-lg border border-danger/30 bg-danger-soft p-3 text-xs text-danger flex items-start gap-2">
 								<AlertTriangle className="size-4 shrink-0 mt-0.5" />
 								<div>
-									<strong>Permanent Deletion Warning:</strong> Accepted memes are imported to S3 and then <strong>permanently deleted from Immich</strong>. Auto-accept will bypass human review and trigger automatic deletion for assets scoring above this threshold.
+									<strong>Permanent Deletion Warning:</strong> Accepted memes
+									are imported to S3 and then{" "}
+									<strong>permanently deleted from Immich</strong>. Auto-accept
+									will bypass human review and trigger automatic deletion for
+									assets scoring above this threshold.
 								</div>
 							</div>
 
@@ -289,7 +301,8 @@ function SmartQueriesSection({
 						Immich Smart-Search Queries
 					</h2>
 					<p className="text-sm text-muted">
-						Semantic CLIP queries run against Immich to surface candidate memes during sync.
+						Semantic CLIP queries run against Immich to surface candidate memes
+						during sync.
 					</p>
 				</div>
 				{saved && (
@@ -311,7 +324,12 @@ function SmartQueriesSection({
 						}
 					}}
 				/>
-				<Button variant="secondary" size="md" onClick={addQuery} disabled={!newQuery.trim()}>
+				<Button
+					variant="secondary"
+					size="md"
+					onClick={addQuery}
+					disabled={!newQuery.trim()}
+				>
 					<Plus className="size-4" /> Add
 				</Button>
 			</div>
@@ -319,7 +337,7 @@ function SmartQueriesSection({
 			<ul className="space-y-2 max-h-60 overflow-y-auto">
 				{queries.map((q, idx) => (
 					<li
-						key={`${q}-${idx}`}
+						key={q}
 						className="flex items-center justify-between rounded-lg border border-line bg-sunken/30 px-3 py-2 text-sm"
 					>
 						<span className="text-fg font-mono text-xs">{q}</span>
@@ -433,13 +451,17 @@ function CaptionSection({
 				</h3>
 				<div className="grid gap-3 sm:grid-cols-2">
 					<div className="rounded-lg border border-line bg-surface p-3 space-y-1">
-						<span className="text-xs font-medium text-accent">With Confirmed Creator:</span>
+						<span className="text-xs font-medium text-accent">
+							With Confirmed Creator:
+						</span>
 						<pre className="whitespace-pre-wrap font-sans text-xs text-fg leading-relaxed">
 							{livePreview}
 						</pre>
 					</div>
 					<div className="rounded-lg border border-line bg-surface p-3 space-y-1">
-						<span className="text-xs font-medium text-muted">With Unknown Creator:</span>
+						<span className="text-xs font-medium text-muted">
+							With Unknown Creator:
+						</span>
 						<pre className="whitespace-pre-wrap font-sans text-xs text-fg leading-relaxed">
 							{fallbackLivePreview}
 						</pre>
@@ -447,7 +469,12 @@ function CaptionSection({
 				</div>
 			</div>
 
-			<Button variant="primary" size="sm" onClick={handleSave} disabled={!isValid}>
+			<Button
+				variant="primary"
+				size="sm"
+				onClick={handleSave}
+				disabled={!isValid}
+			>
 				Save Caption Settings
 			</Button>
 		</section>
@@ -501,7 +528,9 @@ function AiSection({
 						max={100}
 						step={0.5}
 						value={dailyBudget}
-						onChange={(e) => setDailyBudget(Number.parseFloat(e.target.value) || 0)}
+						onChange={(e) =>
+							setDailyBudget(Number.parseFloat(e.target.value) || 0)
+						}
 					/>
 				</Field>
 
@@ -514,9 +543,12 @@ function AiSection({
 							className="size-4 rounded border-line text-accent focus:ring-accent"
 						/>
 						<div>
-							<div className="text-sm font-medium text-fg">Pause all AI calls</div>
+							<div className="text-sm font-medium text-fg">
+								Pause all AI calls
+							</div>
 							<div className="text-xs text-muted">
-								Immediately stops automated triage, meme analysis, and attribution search.
+								Immediately stops automated triage, meme analysis, and
+								attribution search.
 							</div>
 						</div>
 					</label>
@@ -544,7 +576,8 @@ function KillSwitchesSection({
 				Emergency Kill Switches
 			</h2>
 			<p className="text-sm text-muted">
-				Global emergency controls to instantly halt irreversible background operations.
+				Global emergency controls to instantly halt irreversible background
+				operations.
 			</p>
 
 			<div className="grid gap-4 sm:grid-cols-2">
@@ -552,7 +585,9 @@ function KillSwitchesSection({
 				<div className="rounded-xl border border-line bg-surface p-4 flex flex-col justify-between gap-4">
 					<div>
 						<div className="flex items-center justify-between">
-							<span className="font-medium text-fg">Immich Photo Deletions</span>
+							<span className="font-medium text-fg">
+								Immich Photo Deletions
+							</span>
 							<span
 								className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
 									settings["immich.deletePaused"]
@@ -564,14 +599,17 @@ function KillSwitchesSection({
 							</span>
 						</div>
 						<p className="mt-1 text-xs text-muted">
-							When paused, accepted photos are safe in S3 but will not be deleted from Immich.
+							When paused, accepted photos are safe in S3 but will not be
+							deleted from Immich.
 						</p>
 					</div>
 
 					<ConfirmDialog
 						trigger={
 							<Button
-								variant={settings["immich.deletePaused"] ? "secondary" : "danger"}
+								variant={
+									settings["immich.deletePaused"] ? "secondary" : "danger"
+								}
 								size="sm"
 							>
 								{settings["immich.deletePaused"]
@@ -616,7 +654,8 @@ function KillSwitchesSection({
 							</span>
 						</div>
 						<p className="mt-1 text-xs text-muted">
-							When paused, scheduled posts remain in queue and will not be published to Instagram.
+							When paused, scheduled posts remain in queue and will not be
+							published to Instagram.
 						</p>
 					</div>
 

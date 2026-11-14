@@ -2,10 +2,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SettingsView } from "./settings-view";
 import type { MeDto, SettingsDto } from "@/lib/api/types";
 import { CurrentUserContext } from "@/lib/client/current-user";
 import { mockApi, renderWithQuery } from "@/test/helpers/dom";
+import { SettingsView } from "./settings-view";
 
 const mockSearchParams = new URLSearchParams();
 vi.mock("next/navigation", () => ({
@@ -58,7 +58,9 @@ describe("SettingsView component", () => {
 
 		expect(screen.getByText("Admins only")).toBeInTheDocument();
 		expect(screen.getByText("memes-admin")).toBeInTheDocument();
-		expect(screen.queryByText("Prefilter Score Threshold")).not.toBeInTheDocument();
+		expect(
+			screen.queryByText("Prefilter Score Threshold"),
+		).not.toBeInTheDocument();
 	});
 
 	it("renders all sections for admin users", async () => {
