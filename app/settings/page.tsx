@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
-import { PageHeader, Placeholder } from "@/components/page-header";
+import { PageHeader } from "@/components/page-header";
+import { SettingsView } from "@/components/settings/settings-view";
 
 export const metadata: Metadata = { title: "Settings" };
 
-/** Owned by the `admin` slice (docs/memes.md "Pages"). */
 export default function Page() {
 	return (
 		<>
 			<PageHeader title="Settings" />
-			<Placeholder>Not built yet.</Placeholder>
+			<SettingsView />
 		</>
 	);
 }
