@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { InstagramAccountDto, PublishingLimitDto } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { db } from "@/lib/db";
@@ -5,6 +6,12 @@ import { env, features } from "@/lib/env";
 import { badRequest, featureDisabled, notFound } from "@/lib/http/errors";
 import { decrypt, encrypt } from "@/lib/instagram/crypto";
 import { createGraphClient } from "@/lib/instagram/graph";
+
+function safeEqual(a: string, b: string): boolean {
+	const ab = Buffer.from(a);
+	const bb = Buffer.from(b);
+	return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
 
 export function checkInstagramFeature(): void {
 	if (!features().instagram) {
@@ -144,7 +151,7 @@ export async function handleOAuthCallback(
 ): Promise<InstagramAccountDto> {
 	checkInstagramFeature();
 
-	if (!input.cookieState || input.state !== input.cookieState) {
+	if (!input.cookieState || !safeEqual(input.state, input.cookieState)) {
 		throw badRequest("Invalid OAuth state parameter");
 	}
 
