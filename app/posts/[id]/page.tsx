@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
-import { PageHeader, Placeholder } from "@/components/page-header";
+import { PostDetailPage } from "@/components/posts/post-detail-page";
 
 export const metadata: Metadata = { title: "Post" };
 
 /** Owned by the `posts` slice (docs/memes.md "Pages"). */
-export default function Page() {
-	return (
-		<>
-			<PageHeader title="Post" />
-			<Placeholder>Not built yet.</Placeholder>
-		</>
-	);
+export default async function Page({
+	params,
+}: {
+	params: Promise<{ id: string }>;
+}) {
+	const { id } = await params;
+	return <PostDetailPage id={id} />;
 }

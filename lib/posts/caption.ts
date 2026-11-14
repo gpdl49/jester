@@ -1,82 +1,167 @@
+import type { Sensitivity } from "@/lib/api/types";
 import {
 	DEFAULT_CAPTION_TEMPLATE,
 	DEFAULT_UNKNOWN_CREDIT,
-	defaultSettings,
 	getSetting,
 } from "@/lib/settings";
 
-export type CaptionPostInput = {
+export type CaptionMemeInput = {
+	creditText: string | null;
+	hashtags: string[];
+	sensitivity?: Sensitivity | null | unknown;
+};
+
+export type RenderCaptionInput = {
 	caption: string;
 	items: {
-		meme: {
-			creditText: string | null;
-			hashtags: string[];
-		};
+		meme: CaptionMemeInput;
 	}[];
 };
 
-export type RenderedCaption = {
+export type RenderCaptionResult = {
 	text: string;
 	warnings: string[];
 };
 
+export const MAX_CAPTION_LENGTH = 2200;
+export const MAX_HASHTAGS_COUNT = 30;
+
+function isSensitive(sensitivity: unknown): boolean {
+	if (!sensitivity || typeof sensitivity !== "object") {
+		return false;
+	}
+	const s = sensitivity as Record<string, unknown>;
+	return Boolean(s.nsfw || s.politics || s.slurs || s.personalData);
+}
+
+function normalizeHashtag(tag: string): string {
+	const cleaned = tag.trim().replace(/^#+/, "");
+	return cleaned.length > 0 ? `#${cleaned}` : "";
+}
+
+function buildRenderedText(
+	template: string,
+	caption: string,
+	credit: string,
+	hashtags: string,
+): string {
+	const replaced = template
+		.replace("{caption}", caption)
+		.replace("{credit}", credit)
+		.replace("{hashtags}", hashtags);
+
+	// Collapse 3+ newlines to 2 and trim.
+	return replaced.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /**
- * Renders the final caption for an Instagram post using the configured
- * caption template and meme attribution credits.
+ * Pure caption renderer for Instagram publishing and live previews.
+ * Applies the `caption.template` setting with `{caption}`, `{credit}`, and `{hashtags}`.
+ * Enforces Instagram limits (2,200 chars, ≤ 30 hashtags), collapses extra newlines,
+ * and emits warnings for truncation, sensitive content, and missing attributions.
  */
 export async function renderCaption(
-	post: CaptionPostInput,
-): Promise<RenderedCaption> {
+	post: RenderCaptionInput,
+): Promise<RenderCaptionResult> {
+	const warnings: string[] = [];
+
 	let template = DEFAULT_CAPTION_TEMPLATE;
 	let unknownCredit = DEFAULT_UNKNOWN_CREDIT;
 	try {
 		template = await getSetting("caption.template");
 		unknownCredit = await getSetting("caption.unknownCredit");
 	} catch {
-		const defaults = defaultSettings();
-		template = defaults["caption.template"];
-		unknownCredit = defaults["caption.unknownCredit"];
+		// Fallback to defaults if settings can't be fetched (e.g. unit test without DB)
 	}
 
-	// Collect unique credits and hashtags across items
-	const credits: string[] = [];
-	const allHashtags: string[] = [];
+	// 1. Credit computation
+	const confirmedCredits = post.items
+		.map((item) => item.meme.creditText?.trim())
+		.filter((c): c is string => Boolean(c && c.length > 0));
 
+	const dedupedCredits = Array.from(new Set(confirmedCredits));
+
+	let creditStr = "";
+	if (dedupedCredits.length > 0) {
+		creditStr = dedupedCredits.map((c) => `📸 ${c}`).join(" · ");
+	} else {
+		creditStr = unknownCredit;
+	}
+
+	// Warning: unknown creator if any item lacks confirmed creditText or if no items
+	const hasUnknownCreator =
+		post.items.length === 0 ||
+		post.items.some((item) => !item.meme.creditText?.trim());
+	if (hasUnknownCreator) {
+		warnings.push("Unknown creator");
+	}
+
+	// 2. Hashtags computation
+	const allTags: string[] = [];
 	for (const item of post.items) {
-		if (item.meme.creditText?.trim()) {
-			credits.push(`📸 ${item.meme.creditText.trim()}`);
-		}
-		for (const tag of item.meme.hashtags) {
-			const cleaned = tag.trim().replace(/^#+/, "");
-			if (cleaned && !allHashtags.includes(`#${cleaned}`)) {
-				allHashtags.push(`#${cleaned}`);
+		for (const h of item.meme.hashtags ?? []) {
+			const norm = normalizeHashtag(h);
+			if (norm && !allTags.includes(norm)) {
+				allTags.push(norm);
 			}
 		}
 	}
 
-	const creditBlock = credits.length > 0 ? credits.join("\n") : unknownCredit;
-	const hashtagsBlock = allHashtags.join(" ");
-
-	// Replace template tokens
-	let text = template
-		.replace("{caption}", post.caption.trim())
-		.replace("{credit}", creditBlock)
-		.replace("{hashtags}", hashtagsBlock);
-
-	// Clean up extra blank lines (more than 2 consecutive newlines)
-	text = text.replace(/\n{3,}/g, "\n\n").trim();
-
-	const warnings: string[] = [];
-	if (allHashtags.length > 30) {
-		warnings.push(
-			`Post has ${allHashtags.length} hashtags; Instagram allows at most 30.`,
-		);
+	if (allTags.length > MAX_HASHTAGS_COUNT) {
+		warnings.push("Hashtags trimmed to 30");
 	}
-	if (text.length > 2200) {
-		warnings.push(
-			`Caption length is ${text.length} characters; Instagram allows at most 2,200.`,
-		);
+	const finalTags = allTags.slice(0, MAX_HASHTAGS_COUNT);
+	const hashtagsStr = finalTags.join(" ");
+
+	// 3. Sensitivity check
+	const anySensitive = post.items.some((item) =>
+		isSensitive(item.meme.sensitivity),
+	);
+	if (anySensitive) {
+		warnings.push("Post contains sensitive content");
 	}
 
-	return { text, warnings };
+	// 4. Caption rendering and length truncation
+	let captionPart = post.caption ?? "";
+	let rendered = buildRenderedText(
+		template,
+		captionPart,
+		creditStr,
+		hashtagsStr,
+	);
+
+	if (rendered.length > MAX_CAPTION_LENGTH) {
+		warnings.push("Caption exceeds 2,200 characters (truncated)");
+
+		// Truncate captionPart so that rendered.length <= MAX_CAPTION_LENGTH.
+		// Binary search the longest caption slice that fits.
+		let low = 0;
+		let high = captionPart.length;
+		let bestCaption = "";
+
+		while (low <= high) {
+			const mid = Math.floor((low + high) / 2);
+			const testCaption = captionPart.slice(0, mid);
+			const testRendered = buildRenderedText(
+				template,
+				testCaption,
+				creditStr,
+				hashtagsStr,
+			);
+			if (testRendered.length <= MAX_CAPTION_LENGTH) {
+				bestCaption = testCaption;
+				low = mid + 1;
+			} else {
+				high = mid - 1;
+			}
+		}
+
+		captionPart = bestCaption;
+		rendered = buildRenderedText(template, captionPart, creditStr, hashtagsStr);
+	}
+
+	return {
+		text: rendered,
+		warnings,
+	};
 }

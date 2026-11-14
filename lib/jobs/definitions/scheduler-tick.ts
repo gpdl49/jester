@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineJob, PermanentJobError } from "@/lib/jobs/define";
+import { defineJob } from "@/lib/jobs/define";
+import { runSchedulerTick } from "@/lib/schedule/tick";
 
 /**
  * `scheduler.tick` (docs/memes.md "Jobs"). Owned by the `posts` slice: replace the
@@ -11,6 +12,6 @@ export const schedulerTick = defineJob({
 	cron: { expression: "* * * * *", data: {} },
 	queue: { retryLimit: 0, policy: "singleton" },
 	handler: async (_data) => {
-		throw new PermanentJobError("scheduler.tick: not implemented");
+		await runSchedulerTick();
 	},
 });
