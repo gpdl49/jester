@@ -82,88 +82,78 @@ const DECIDABLE_STATUSES: readonly TriageStatus[] = [
 	"error",
 ];
 
-export async function acceptAsset(
+type Decision = "accept" | "reject";
+
+/**
+ * Atomically moves a decidable asset to accepted/rejected. The status check is
+ * part of the UPDATE, so two concurrent decisions can't both win (a late
+ * reject can't overwrite an accept whose import is already queued).
+ * Returns true only for the caller that made the transition.
+ */
+async function applyDecision(
 	immichAssetId: string,
+	decision: Decision,
 	actorId: string | null,
-): Promise<ImmichAsset> {
+	auditExtra: Record<string, unknown> = {},
+): Promise<boolean> {
+	const target: TriageStatus = decision === "accept" ? "accepted" : "rejected";
+	const asset = await db().immichAsset.findUnique({
+		where: { id: immichAssetId },
+		select: { memeProbability: true },
+	});
+	const { count } = await db().immichAsset.updateMany({
+		where: { id: immichAssetId, triageStatus: { in: [...DECIDABLE_STATUSES] } },
+		data: { triageStatus: target, decidedById: actorId, decidedAt: new Date() },
+	});
+	if (count === 0) {
+		return false;
+	}
+	if (decision === "accept") {
+		await enqueue(importImmich, { immichAssetId });
+	}
+	await audit({
+		actorId,
+		action: decision === "accept" ? "triage.accept" : "triage.reject",
+		subjectType: "immich_asset",
+		subjectId: immichAssetId,
+		data: { memeProbability: asset?.memeProbability ?? null, ...auditExtra },
+	});
+	return true;
+}
+
+async function decideOne(
+	immichAssetId: string,
+	decision: Decision,
+	actorId: string | null,
+): Promise<{ asset: ImmichAsset; changed: boolean }> {
+	const changed = await applyDecision(immichAssetId, decision, actorId);
 	const asset = await db().immichAsset.findUnique({
 		where: { id: immichAssetId },
 	});
 	if (!asset) {
 		throw notFound(`Immich asset "${immichAssetId}" not found`);
 	}
-
-	if (asset.triageStatus === "accepted") {
-		return asset;
+	const target: TriageStatus = decision === "accept" ? "accepted" : "rejected";
+	if (!changed && asset.triageStatus !== target) {
+		throw conflict(
+			`Cannot ${decision} asset with status "${asset.triageStatus}"`,
+		);
 	}
+	return { asset, changed };
+}
 
-	if (!DECIDABLE_STATUSES.includes(asset.triageStatus as TriageStatus)) {
-		throw conflict(`Cannot accept asset with status "${asset.triageStatus}"`);
-	}
-
-	const updated = await db().immichAsset.update({
-		where: { id: immichAssetId },
-		data: {
-			triageStatus: "accepted",
-			decidedById: actorId,
-			decidedAt: new Date(),
-		},
-	});
-
-	await enqueue(importImmich, { immichAssetId });
-
-	await audit({
-		actorId,
-		action: "triage.accept",
-		subjectType: "immich_asset",
-		subjectId: immichAssetId,
-		data: {
-			memeProbability: asset.memeProbability,
-		},
-	});
-
-	return updated;
+export async function acceptAsset(
+	immichAssetId: string,
+	actorId: string | null,
+): Promise<ImmichAsset> {
+	return (await decideOne(immichAssetId, "accept", actorId)).asset;
 }
 
 export async function rejectAsset(
 	immichAssetId: string,
 	actorId: string | null,
 ): Promise<ImmichAsset> {
-	const asset = await db().immichAsset.findUnique({
-		where: { id: immichAssetId },
-	});
-	if (!asset) {
-		throw notFound(`Immich asset "${immichAssetId}" not found`);
-	}
-
-	if (asset.triageStatus === "rejected") {
-		return asset;
-	}
-
-	if (!DECIDABLE_STATUSES.includes(asset.triageStatus as TriageStatus)) {
-		throw conflict(`Cannot reject asset with status "${asset.triageStatus}"`);
-	}
-
-	const updated = await db().immichAsset.update({
-		where: { id: immichAssetId },
-		data: {
-			triageStatus: "rejected",
-			decidedById: actorId,
-			decidedAt: new Date(),
-		},
-	});
-
-	await audit({
-		actorId,
-		action: "triage.reject",
-		subjectType: "immich_asset",
-		subjectId: immichAssetId,
-		data: {
-			memeProbability: asset.memeProbability,
-		},
-	});
-
-	return updated;
+	return (await decideOne(immichAssetId, "reject", actorId)).asset;
 }
 
 export async function decideAssets(
@@ -173,65 +163,12 @@ export async function decideAssets(
 	let accepted = 0;
 	let rejected = 0;
 
+	// First decision per asset wins; assets in any other state (including
+	// already accepted or rejected) and unknown ids are skipped.
 	for (const { immichAssetId, decision } of decisions) {
-		const asset = await db().immichAsset.findUnique({
-			where: { id: immichAssetId },
-		});
-		if (!asset) {
-			continue;
-		}
-
-		if (decision === "accept") {
-			if (asset.triageStatus === "accepted") {
-				continue;
-			}
-			if (!DECIDABLE_STATUSES.includes(asset.triageStatus as TriageStatus)) {
-				continue;
-			}
-			await db().immichAsset.update({
-				where: { id: immichAssetId },
-				data: {
-					triageStatus: "accepted",
-					decidedById: actorId,
-					decidedAt: new Date(),
-				},
-			});
-			await enqueue(importImmich, { immichAssetId });
-			await audit({
-				actorId,
-				action: "triage.accept",
-				subjectType: "immich_asset",
-				subjectId: immichAssetId,
-				data: {
-					memeProbability: asset.memeProbability,
-				},
-			});
-			accepted++;
-		} else if (decision === "reject") {
-			if (asset.triageStatus === "rejected") {
-				continue;
-			}
-			if (!DECIDABLE_STATUSES.includes(asset.triageStatus as TriageStatus)) {
-				continue;
-			}
-			await db().immichAsset.update({
-				where: { id: immichAssetId },
-				data: {
-					triageStatus: "rejected",
-					decidedById: actorId,
-					decidedAt: new Date(),
-				},
-			});
-			await audit({
-				actorId,
-				action: "triage.reject",
-				subjectType: "immich_asset",
-				subjectId: immichAssetId,
-				data: {
-					memeProbability: asset.memeProbability,
-				},
-			});
-			rejected++;
+		if (await applyDecision(immichAssetId, decision, actorId)) {
+			if (decision === "accept") accepted++;
+			else rejected++;
 		}
 	}
 
@@ -247,32 +184,23 @@ export async function acceptAbove(
 			triageStatus: "scored",
 			memeProbability: { gte: minProbability },
 		},
-		select: { id: true, memeProbability: true },
+		select: { id: true },
 	});
 
+	let accepted = 0;
 	for (const candidate of candidates) {
-		await db().immichAsset.update({
-			where: { id: candidate.id },
-			data: {
-				triageStatus: "accepted",
-				decidedById: actorId,
-				decidedAt: new Date(),
-			},
-		});
-		await enqueue(importImmich, { immichAssetId: candidate.id });
-		await audit({
-			actorId,
-			action: "triage.accept",
-			subjectType: "immich_asset",
-			subjectId: candidate.id,
-			data: {
-				memeProbability: candidate.memeProbability,
+		// Only count assets this call actually moved (others may have been
+		// decided since the query).
+		if (
+			await applyDecision(candidate.id, "accept", actorId, {
 				acceptAbove: minProbability,
-			},
-		});
+			})
+		) {
+			accepted++;
+		}
 	}
 
-	return { accepted: candidates.length };
+	return { accepted };
 }
 
 export async function resetAsset(

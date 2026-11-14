@@ -417,3 +417,54 @@ describeWithDb("Triage API routes", () => {
 		});
 	});
 });
+
+describeWithDb("Triage decisions: concurrency", () => {
+	beforeEach(async () => {
+		await resetDb();
+	});
+
+	it("a concurrent accept and reject of one asset has exactly one winner and one import enqueue", async () => {
+		const asset = await createImmichAsset({ triageStatus: "scored" });
+		const send = (decision: "accept" | "reject") =>
+			postDecisions(
+				apiRequest("/api/triage/decisions", {
+					method: "POST",
+					user: TEST_USER,
+					body: { decisions: [{ immichAssetId: asset.id, decision }] },
+				}),
+				{},
+			).then((r) => json<{ accepted: number; rejected: number }>(r));
+
+		const [a, b] = await Promise.all([send("accept"), send("reject")]);
+		expect(a.accepted + a.rejected + b.accepted + b.rejected).toBe(1);
+
+		const row = await db().immichAsset.findUnique({ where: { id: asset.id } });
+		const audits = await db().auditEvent.count({
+			where: { subjectId: asset.id },
+		});
+		expect(audits).toBe(1);
+		expect(["accepted", "rejected"]).toContain(row?.triageStatus);
+		// The audit trail must agree with the final state.
+		const audit = await db().auditEvent.findFirst({
+			where: { subjectId: asset.id },
+		});
+		expect(audit?.action).toBe(
+			row?.triageStatus === "accepted" ? "triage.accept" : "triage.reject",
+		);
+	});
+
+	it("a rejected asset can't be accepted by a late decision", async () => {
+		const asset = await createImmichAsset({ triageStatus: "rejected" });
+		const res = await postDecisions(
+			apiRequest("/api/triage/decisions", {
+				method: "POST",
+				user: TEST_USER,
+				body: { decisions: [{ immichAssetId: asset.id, decision: "accept" }] },
+			}),
+			{},
+		);
+		expect(await json(res)).toEqual({ accepted: 0, rejected: 0 });
+		const row = await db().immichAsset.findUnique({ where: { id: asset.id } });
+		expect(row?.triageStatus).toBe("rejected");
+	});
+});
