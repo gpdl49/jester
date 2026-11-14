@@ -3,7 +3,9 @@ import type { AttributionPlatform } from "@/lib/api/types";
 /**
  * Formats a platform enum into a display name.
  */
-export function formatPlatformName(platform: AttributionPlatform | string): string {
+export function formatPlatformName(
+	platform: AttributionPlatform | string,
+): string {
 	switch (platform.toLowerCase()) {
 		case "instagram":
 			return "Instagram";
