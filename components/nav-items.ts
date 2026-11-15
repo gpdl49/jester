@@ -20,7 +20,7 @@ export type NavItem = {
 	adminOnly?: boolean;
 };
 
-/** Pages from docs/memes.md "Pages". */
+/** Pages from docs/jester.md "Pages". */
 export const NAV_ITEMS: NavItem[] = [
 	{ href: "/", label: "Dashboard", icon: LayoutDashboard, primary: true },
 	{ href: "/triage", label: "Triage", icon: ScanSearch, primary: true },

@@ -1,6 +1,6 @@
-# memes: agent notes
+# jester: agent notes
 
-- **Contract first.** `docs/memes.md` in gpdl49/homestacks (a copy is in
+- **Contract first.** `docs/jester.md` in gpdl49/homestacks (a copy is in
   `docs/contract.md` here) is the build contract: names, env vars, data
   model, jobs, HTTP API, pages, object keys. Follow it exactly. These files
   are contracts too and are **frozen** for feature work: `prisma/schema.prisma`

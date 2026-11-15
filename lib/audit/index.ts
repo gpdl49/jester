@@ -1,7 +1,7 @@
 import { db, type Prisma } from "@/lib/db";
 
 /**
- * The audit log (docs/memes.md "AuditEvent"). Every slice records
+ * The audit log (docs/jester.md "AuditEvent"). Every slice records
  * user-visible decisions and destructive actions through `audit()`:
  * `triage.accept`, `triage.reject`, `meme.approve`, `meme.reject`,
  * `meme.delete`, `immich.delete`, `attribution.confirm`, `post.queue`,

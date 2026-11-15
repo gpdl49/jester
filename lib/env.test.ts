@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TRIAGE_MODEL, EnvError, features, parseEnv } from "./env";
 
-const base = { DATABASE_URL: "postgresql://x@localhost/memes" };
+const base = { DATABASE_URL: "postgresql://x@localhost/jester" };
 
 describe("parseEnv", () => {
 	it("applies the contract defaults", () => {
 		const e = parseEnv(base);
-		expect(e.REQUIRED_GROUP).toBe("memes");
-		expect(e.ADMIN_GROUP).toBe("memes-admin");
-		expect(e.MEDIA_BUCKET).toBe("centerpoint-memes-media");
+		expect(e.REQUIRED_GROUP).toBe("jester");
+		expect(e.ADMIN_GROUP).toBe("jester-admin");
+		expect(e.MEDIA_BUCKET).toBe("centerpoint-jester-media");
 		expect(e.OPENROUTER_TRIAGE_MODEL).toBe(DEFAULT_TRIAGE_MODEL);
 		expect(e.AI_DAILY_BUDGET_USD).toBe(3);
 		expect(e.IMMICH_DELETE_ENABLED).toBe(false);

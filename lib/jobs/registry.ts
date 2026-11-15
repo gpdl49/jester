@@ -13,7 +13,7 @@ import { schedulerTick } from "@/lib/jobs/definitions/scheduler-tick";
 import { systemPing } from "@/lib/jobs/definitions/system-ping";
 import { triageClassify } from "@/lib/jobs/definitions/triage-classify";
 
-/** Every job type the worker handles (docs/memes.md "Jobs"). */
+/** Every job type the worker handles (docs/jester.md "Jobs"). */
 export const jobDefinitions: readonly JobDefinition[] = [
 	systemPing,
 	immichScan,

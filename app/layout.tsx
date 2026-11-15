@@ -6,10 +6,10 @@ import { Providers } from "@/components/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-	title: { default: "Memes", template: "%s · Memes" },
+	title: { default: "Jester", template: "%s · Jester" },
 	description: "Meme curation and Instagram scheduling.",
-	applicationName: "Memes",
-	appleWebApp: { capable: true, title: "Memes", statusBarStyle: "default" },
+	applicationName: "Jester",
+	appleWebApp: { capable: true, title: "Jester", statusBarStyle: "default" },
 	robots: { index: false, follow: false },
 };
 
@@ -34,7 +34,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 								href="/"
 								className="font-semibold tracking-tight text-fg text-lg"
 							>
-								Memes
+								Jester
 							</Link>
 							<TopNav />
 							<a

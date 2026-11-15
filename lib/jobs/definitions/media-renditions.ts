@@ -3,7 +3,7 @@ import { defineJob } from "@/lib/jobs/define";
 import { generateRenditions } from "@/lib/media/renditions";
 
 /**
- * `media.renditions` (docs/memes.md "Jobs"). Owned by the `media` slice: replace the
+ * `media.renditions` (docs/jester.md "Jobs"). Owned by the `media` slice: replace the
  * handler body; keep the name and payload schema (they are the contract).
  */
 export const mediaRenditions = defineJob({

@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
 	return {
-		name: "Memes",
-		short_name: "Memes",
+		name: "Jester",
+		short_name: "Jester",
 		description: "Meme curation and Instagram scheduling.",
 		start_url: "/",
 		scope: "/",

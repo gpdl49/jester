@@ -17,7 +17,7 @@ const adminUser: MeDto = {
 	sub: "s-admin",
 	email: "admin@example.com",
 	username: "admin",
-	groups: ["memes", "memes-admin"],
+	groups: ["jester", "jester-admin"],
 	isAdmin: true,
 };
 
@@ -26,7 +26,7 @@ const regularUser: MeDto = {
 	sub: "s-user",
 	email: "user@example.com",
 	username: "user",
-	groups: ["memes"],
+	groups: ["jester"],
 	isAdmin: false,
 };
 
@@ -57,7 +57,7 @@ describe("SettingsView component", () => {
 		);
 
 		expect(screen.getByText("Admins only")).toBeInTheDocument();
-		expect(screen.getByText("memes-admin")).toBeInTheDocument();
+		expect(screen.getByText("jester-admin")).toBeInTheDocument();
 		expect(
 			screen.queryByText("Prefilter Score Threshold"),
 		).not.toBeInTheDocument();
@@ -121,7 +121,7 @@ describe("SettingsView component", () => {
 
 		await waitFor(() => {
 			expect(
-				screen.getByText("Enable Auto-Accept for high-confidence memes"),
+				screen.getByText("Enable Auto-Accept for high-confidence jester"),
 			).toBeInTheDocument();
 		});
 
@@ -132,7 +132,7 @@ describe("SettingsView component", () => {
 
 		// Check the checkbox
 		const checkbox = screen.getByRole("checkbox", {
-			name: /Enable Auto-Accept for high-confidence memes/,
+			name: /Enable Auto-Accept for high-confidence jester/,
 		});
 		fireEvent.click(checkbox);
 

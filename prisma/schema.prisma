@@ -1,4 +1,4 @@
-// Data model: docs/memes.md "Data model" in gpdl49/homestacks is the
+// Data model: docs/jester.md "Data model" in gpdl49/homestacks is the
 // contract. Change it there first; slices never edit this file without the
 // coordinator's go-ahead.
 //

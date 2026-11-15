@@ -3,7 +3,7 @@ import { defineJob } from "@/lib/jobs/define";
 import { importFromImmich } from "@/lib/media/import";
 
 /**
- * `import.immich` (docs/memes.md "Jobs"). Owned by the `media` slice: replace the
+ * `import.immich` (docs/jester.md "Jobs"). Owned by the `media` slice: replace the
  * handler body; keep the name and payload schema (they are the contract).
  */
 export const importImmich = defineJob({

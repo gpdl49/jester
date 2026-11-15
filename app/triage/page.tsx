@@ -6,7 +6,7 @@ import { requireUser } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Triage" };
 
-/** Owned by the `triage` slice (docs/memes.md "Pages"). */
+/** Owned by the `triage` slice (docs/jester.md "Pages"). */
 export default async function Page() {
 	let isAdmin = false;
 	try {

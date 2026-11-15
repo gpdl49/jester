@@ -10,7 +10,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { type Env, env } from "@/lib/env";
 
 /**
- * Media storage. Object keys are the contract in docs/memes.md ("Object
+ * Media storage. Object keys are the contract in docs/jester.md ("Object
  * keys"); always build them with the helpers below.
  */
 export const MEDIA_VARIANTS = ["original", "display", "thumb"] as const;

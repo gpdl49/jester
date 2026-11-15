@@ -5,7 +5,7 @@ import { defineJob } from "@/lib/jobs/define";
 import { enqueue } from "@/lib/jobs/queue";
 
 /**
- * `attribution.find` (docs/memes.md "Jobs"). Owned by the `attribution` slice: replace the
+ * `attribution.find` (docs/jester.md "Jobs"). Owned by the `attribution` slice: replace the
  * handler body; keep the name and payload schema (they are the contract).
  */
 export const attributionFind = defineJob({

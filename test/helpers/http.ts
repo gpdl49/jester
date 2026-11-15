@@ -4,7 +4,7 @@ export const TEST_USER: User = {
 	sub: "test-sub",
 	email: "test@example.com",
 	username: "tester",
-	groups: ["memes"],
+	groups: ["jester"],
 };
 
 /** The headers oauth2-proxy would send for this user. */

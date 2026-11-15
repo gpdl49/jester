@@ -3,7 +3,7 @@ import { refreshExpiringTokens } from "@/lib/instagram/refresh";
 import { defineJob } from "@/lib/jobs/define";
 
 /**
- * `instagram.refresh-tokens` (docs/memes.md "Jobs").
+ * `instagram.refresh-tokens` (docs/jester.md "Jobs").
  * Daily job to refresh Instagram tokens expiring within 10 days.
  */
 export const instagramRefreshTokens = defineJob({

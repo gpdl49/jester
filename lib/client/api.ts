@@ -1,5 +1,5 @@
 /**
- * Typed browser client for the HTTP API (docs/memes.md "HTTP API"). Every
+ * Typed browser client for the HTTP API (docs/jester.md "HTTP API"). Every
  * response shape comes from lib/api/types.ts; every non-2xx response is thrown
  * as an ApiError carrying the contract's `{error, message}` and the status.
  *

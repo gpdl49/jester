@@ -1,4 +1,4 @@
-# Memes
+# Jester
 
 A curation dashboard for the memes buried in Immich. It finds them in 15 years
 of photos, moves them out of Immich into S3, tags them with AI, looks for the
@@ -8,12 +8,12 @@ original creator, and posts them to an Instagram creator account on a schedule.
 
 | Area | Decision |
 |------|----------|
-| Code | Private repo [`gpdl49/jester`](https://github.com/gpdl49/jester), submodule at `projects/jester` (first-party, no `branch =` line). Only the repository and image are called jester; every runtime name (namespace, host, roles, bucket, env) stays `memes`. Foundation copied from Wardrobe (`lib/http`, `lib/auth`, `lib/jobs`, `lib/s3`, test helpers, CI, Dockerfile). |
+| Code | Private repo [`gpdl49/jester`](https://github.com/gpdl49/jester), submodule at `projects/jester` (first-party, no `branch =` line). Foundation copied from Wardrobe (`lib/http`, `lib/auth`, `lib/jobs`, `lib/s3`, test helpers, CI, Dockerfile). |
 | Stack | Next.js 16 (App Router, standalone output), TypeScript, Prisma 7 + `@prisma/adapter-pg`, Tailwind 4, Radix, TanStack Query, zod 4, sharp; Node 24, pnpm. Vitest for unit tests and Postgres-backed integration tests; MinIO for S3 in tests. |
-| Hosting | Centerpoint, namespace `memes-system`. One image, two Deployments: `memes` (web, `JOBS_ENABLED=false`) and `memes-worker` (same image, `JOBS_ENABLED=true`, no Service), so long imports never slow down the dashboard. |
-| Auth | oauth2-proxy sidecar with Zitadel OIDC, exactly as in Wardrobe. Role `memes` lets a user in (curate, schedule). Role `memes-admin` can also connect Instagram accounts, change settings and budgets, and purge. One shared library, not per-user; every write records its actor. |
-| Database | CNPG `memes-pg`, backed up to S3 like the other CNPG clusters. pg-boss jobs on the same database. Postgres full-text search on OCR text, description and tags. |
-| Storage | S3 bucket `centerpoint-memes-media` (eu-central-1), **versioned** because the Immich copy is deleted permanently. Noncurrent versions expire after 90 days. |
+| Hosting | Centerpoint, namespace `jester-system`. One image, two Deployments: `jester` (web, `JOBS_ENABLED=false`) and `jester-worker` (same image, `JOBS_ENABLED=true`, no Service), so long imports never slow down the dashboard. |
+| Auth | oauth2-proxy sidecar with Zitadel OIDC, exactly as in Wardrobe. Role `jester` lets a user in (curate, schedule). Role `jester-admin` can also connect Instagram accounts, change settings and budgets, and purge. One shared library, not per-user; every write records its actor. |
+| Database | CNPG `jester-pg`, backed up to S3 like the other CNPG clusters. pg-boss jobs on the same database. Postgres full-text search on OCR text, description and tags. |
+| Storage | S3 bucket `centerpoint-jester-media` (eu-central-1), **versioned** because the Immich copy is deleted permanently. Noncurrent versions expire after 90 days. |
 | Finding memes | Every Immich image is scored with free signals (filename, MIME type, missing camera EXIF, screenshot dimensions, Immich CLIP smart-search hits, Immich OCR text). Candidates over a threshold go to a cheap vision triage model on Immich's preview thumbnail. You confirm or reject them in a review queue. Auto-accept above a threshold exists but is **off** by default. |
 | Moving out of Immich | An accepted asset's original is downloaded, its SHA-1 checked against Immich's checksum, and it is uploaded to S3 and verified with a HeadObject (size and SHA-256). Only then is the asset **permanently deleted** from Immich (`DELETE /api/assets {force: true}`). Every deletion is written to an audit table. A global kill switch `IMMICH_DELETE_ENABLED` leaves the asset in Immich and records the deletion as `skipped`. |
 | Ongoing sync | The worker polls Immich every 10 minutes (`updatedAfter` cursor), so screenshots that phone backup uploads to Immich go through the same pipeline. The dashboard also takes direct drag-and-drop uploads, which skip triage. |
@@ -35,22 +35,22 @@ Every component is built against this section. Change it here first.
 
 | Thing | Value |
 |-------|-------|
-| Public host | `memes.vidur.xyz`, Centerpoint gateway listener `https-wildcard-vidur-xyz` |
-| Namespace | `memes-system` (Centerpoint) |
+| Public host | `jester.vidur.xyz`, Centerpoint gateway listener `https-wildcard-vidur-xyz` |
+| Namespace | `jester-system` (Centerpoint) |
 | Image | `ghcr.io/gpdl49/jester`, tags `main` and `main-<sha>` (private; pulled with `ghcr-login`) |
-| Image policy | `flux-system:memes` on Sinkhole, filter `^main$`, digest reflection |
-| Deployments | `memes` (web + oauth2-proxy sidecar, Service `memes` on port `4180` only) and `memes-worker` (no sidecar, no Service) |
+| Image policy | `flux-system:jester` on Sinkhole, filter `^main$`, digest reflection |
+| Deployments | `jester` (web + oauth2-proxy sidecar, Service `jester` on port `4180` only) and `jester-worker` (no sidecar, no Service) |
 | App container | `127.0.0.1:3000`, UID 65532, read-only root; writable `/tmp` (emptyDir, 2 GiB) and `/app/.next/cache` |
 | Health | `GET /api/healthz` → 200 `ok`; oauth2-proxy `SKIP_AUTH_ROUTES=GET=^/api/healthz$`. The worker's probe is `exec: node -e "fetch('http://127.0.0.1:3000/api/healthz')…"` |
-| Database | CNPG `memes-pg`, database `memes`, owner `memes`; secret `memes-pg-app` (`uri`) |
-| Zitadel roles | `memes`, `memes-admin` (project `homestacks`) |
-| Zitadel app | `memes`, OIDC web, code flow + PKCE, basic auth, redirect `https://memes.vidur.xyz/oauth2/callback`, userinfo in ID token |
+| Database | CNPG `jester-pg`, database `jester`, owner `jester`; secret `jester-pg-app` (`uri`) |
+| Zitadel roles | `jester`, `jester-admin` (project `homestacks`) |
+| Zitadel app | `jester`, OIDC web, code flow + PKCE, basic auth, redirect `https://jester.vidur.xyz/oauth2/callback`, userinfo in ID token |
 | AWS region | `eu-central-1` |
-| Bucket | `centerpoint-memes-media`: private, SSE-S3, owner-enforced, versioning on, noncurrent expiry 90 days, abort incomplete multipart after 1 day, CORS `PUT`/`GET`/`HEAD` from `https://memes.vidur.xyz` and `http://localhost:3000` exposing `ETag` |
-| IAM user | `centerpoint-memes`: `s3:GetObject`, `PutObject`, `DeleteObject`, `AbortMultipartUpload` on `media/*`, `ig/*` and `uploads/*`; `s3:ListBucket` |
-| OpenRouter key | `openrouter_api_key.memes_centerpoint` in `terraform/openrouter`, limit $40 monthly; output `memes_centerpoint_api_key` |
+| Bucket | `centerpoint-jester-media`: private, SSE-S3, owner-enforced, versioning on, noncurrent expiry 90 days, abort incomplete multipart after 1 day, CORS `PUT`/`GET`/`HEAD` from `https://jester.vidur.xyz` and `http://localhost:3000` exposing `ETag` |
+| IAM user | `centerpoint-jester`: `s3:GetObject`, `PutObject`, `DeleteObject`, `AbortMultipartUpload` on `media/*`, `ig/*` and `uploads/*`; `s3:ListBucket` |
+| OpenRouter key | `openrouter_api_key.jester_centerpoint` in `terraform/openrouter`, limit $40 monthly; output `jester_centerpoint_api_key` |
 | Immich | `https://immich.vidur.xyz/api`, an API key created by hand in Immich (Account settings → API keys) with permissions `asset.read`, `asset.view`, `asset.download`, `asset.delete` |
-| Instagram | Meta app created by hand (Instagram API with Instagram Login), redirect `https://memes.vidur.xyz/api/instagram/callback` |
+| Instagram | Meta app created by hand (Instagram API with Instagram Login), redirect `https://jester.vidur.xyz/api/instagram/callback` |
 
 ### Object keys
 
@@ -64,31 +64,31 @@ ig/<postId>/<position>.jpg       # Instagram rendition: sRGB JPEG q90, width 108
 
 HEIC originals are stored as they are; renditions use Immich's `fullsize` JPEG when the source is HEIC (sharp has no HEVC decoder). Direct uploads reject HEIC with 422 `unsupported_format`.
 
-### Secrets in `memes-system`
+### Secrets in `jester-system`
 
 | Secret | Keys | Source |
 |--------|------|--------|
-| `memes-aws` | `access_key_id`, `secret_access_key` | Crossplane AccessKey on Sinkhole (`clusters/sinkhole/memes-aws/`) → PushSecret `centerpoint-memes-aws` |
-| `memes-oidc` | `client_id`, `client_secret` | Crossplane Zitadel `Oidc` `memes` → PushSecret `centerpoint-memes-oidc` |
-| `memes-openrouter` | `api_key` | tofu-controller `openrouter` outputs → PushSecret `centerpoint-memes-openrouter` |
-| `memes-oauth2-proxy-cookie` | `cookie-secret` | SOPS |
-| `memes-app` | `token_encryption_key` (32 random bytes, base64) | SOPS |
-| `memes-immich` | `api_key` | SOPS, added by hand after creating the key in Immich (`optional: true` until then) |
-| `memes-instagram` | `app_id`, `app_secret` | SOPS, added by hand after creating the Meta app (`optional: true` until then) |
+| `jester-aws` | `access_key_id`, `secret_access_key` | Crossplane AccessKey on Sinkhole (`clusters/sinkhole/jester-aws/`) → PushSecret `centerpoint-jester-aws` |
+| `jester-oidc` | `client_id`, `client_secret` | Crossplane Zitadel `Oidc` `jester` → PushSecret `centerpoint-jester-oidc` |
+| `jester-openrouter` | `api_key` | tofu-controller `openrouter` outputs → PushSecret `centerpoint-jester-openrouter` |
+| `jester-oauth2-proxy-cookie` | `cookie-secret` | SOPS |
+| `jester-app` | `token_encryption_key` (32 random bytes, base64) | SOPS |
+| `jester-immich` | `api_key` | SOPS, added by hand after creating the key in Immich (`optional: true` until then) |
+| `jester-instagram` | `app_id`, `app_secret` | SOPS, added by hand after creating the Meta app (`optional: true` until then) |
 | `ghcr-login` | `.dockerconfigjson` | SOPS (same value as Wardrobe's) |
-| `memes-pg-app` | CNPG-generated | CNPG |
+| `jester-pg-app` | CNPG-generated | CNPG |
 
 ### App environment
 
 ```
 HOSTNAME=127.0.0.1  PORT=3000  NODE_ENV=production
-DATABASE_URL                      # memes-pg-app/uri
+DATABASE_URL                      # jester-pg-app/uri
 JOBS_ENABLED=true|false           # worker Deployment true, web false
 AUTH_MODE=proxy|dev               # dev refused when NODE_ENV=production
-REQUIRED_GROUP=memes  ADMIN_GROUP=memes-admin
-PUBLIC_URL=https://memes.vidur.xyz
+REQUIRED_GROUP=jester  ADMIN_GROUP=jester-admin
+PUBLIC_URL=https://jester.vidur.xyz
 AWS_REGION=eu-central-1  AWS_ACCESS_KEY_ID  AWS_SECRET_ACCESS_KEY
-MEDIA_BUCKET=centerpoint-memes-media
+MEDIA_BUCKET=centerpoint-jester-media
 S3_ENDPOINT                       # optional (MinIO, path-style)
 TOKEN_ENCRYPTION_KEY              # base64, 32 bytes; AES-256-GCM for Instagram tokens
 OPENROUTER_API_KEY                # optional: AI features off without it
@@ -108,7 +108,7 @@ Runtime settings that admins change in the UI (thresholds, smart-search queries,
 
 ### Authentication
 
-As in Wardrobe (`docs/wardrobe.md#authentication`), with `OAUTH2_PROXY_ALLOWED_GROUPS=memes`. The app reads `X-Forwarded-User`, `-Email`, `-Preferred-Username` and `-Groups`. A missing user gives 401; without `REQUIRED_GROUP` the response is 403. The app upserts a `User` row on each sign-in. Admin-only routes give 403 to non-admins.
+As in Wardrobe (`docs/wardrobe.md#authentication`), with `OAUTH2_PROXY_ALLOWED_GROUPS=jester`. The app reads `X-Forwarded-User`, `-Email`, `-Preferred-Username` and `-Groups`. A missing user gives 401; without `REQUIRED_GROUP` the response is 403. The app upserts a `User` row on each sign-in. Admin-only routes give 403 to non-admins.
 
 ### Pipeline and states
 
@@ -275,20 +275,20 @@ Every slice runs `pnpm lint && pnpm typecheck && pnpm test && pnpm build` before
 | Path | What |
 |------|------|
 | `projects/jester` | App (submodule) |
-| `clusters/centerpoint/memes-system/` | `database/`, `secrets/`, `install/` (web and worker Deployments, Service, NetworkPolicies), `routing/`, `flux/` (like `wardrobe-system`) |
-| `clusters/sinkhole/memes-aws/` | Crossplane bucket (versioned), IAM user, policy, access key |
-| `clusters/sinkhole/crossplane-system/zitadel-apps/` | `memes` and `memes-admin` roles, OIDC app `memes` |
-| `clusters/sinkhole/external-secrets-system/` | SecretStore `centerpoint-memes-system`, PushSecrets |
-| `clusters/sinkhole/flux-system/image-automation/` | ImageRepository and ImagePolicy `memes` |
-| `terraform/openrouter` | `memes_centerpoint` key |
+| `clusters/centerpoint/jester-system/` | `database/`, `secrets/`, `install/` (web and worker Deployments, Service, NetworkPolicies), `routing/`, `flux/` (like `wardrobe-system`) |
+| `clusters/sinkhole/jester-aws/` | Crossplane bucket (versioned), IAM user, policy, access key |
+| `clusters/sinkhole/crossplane-system/zitadel-apps/` | `jester` and `jester-admin` roles, OIDC app `jester` |
+| `clusters/sinkhole/external-secrets-system/` | SecretStore `centerpoint-jester-system`, PushSecrets |
+| `clusters/sinkhole/flux-system/image-automation/` | ImageRepository and ImagePolicy `jester` |
+| `terraform/openrouter` | `jester_centerpoint` key |
 
-NetworkPolicy egress for both Deployments: DNS, `memes-pg` on 5432, and 443 to the internet outside the pod CIDR (S3, OpenRouter, Zitadel, `immich.vidur.xyz` on Sinkhole, `graph.instagram.com`, `api.instagram.com`).
+NetworkPolicy egress for both Deployments: DNS, `jester-pg` on 5432, and 443 to the internet outside the pod CIDR (S3, OpenRouter, Zitadel, `immich.vidur.xyz` on Sinkhole, `graph.instagram.com`, `api.instagram.com`).
 
 ## Manual steps
 
-1. Create an Immich API key (permissions above) and add it as described in `clusters/centerpoint/memes-system/README.md`.
+1. Create an Immich API key (permissions above) and add it as described in `clusters/centerpoint/jester-system/README.md`.
 2. Switch the Instagram account to a Creator account. Create a Meta app with the "Instagram API with Instagram Login" product, add the redirect URI and yourself as an Instagram tester, then add the app id and secret to `04-instagram.secret.yaml`. Connect the account from `/settings`.
-3. Verify the Git-managed `memes` and `memes-admin` grants for yourself in Zitadel.
+3. Verify the Git-managed `jester` and `jester-admin` grants for yourself in Zitadel.
 4. Before the first backfill, calibrate: run triage on 200 candidates, review them, then decide whether to turn on auto-accept.
 
 ## Open questions
@@ -299,5 +299,5 @@ Deferred; not in v1.
 - Stories, engagement insights (`instagram_business_manage_insights`) and best-time-to-post.
 - An iOS Shortcut ingest endpoint with a personal token (phone backup to Immich covers new screenshots for now).
 - A paid reverse image search provider (SerpApi Google Lens) behind `ReverseImageSearchProvider`.
-- Finer roles for other users (viewer-only, approver) beyond `memes` and `memes-admin`.
+- Finer roles for other users (viewer-only, approver) beyond `jester` and `jester-admin`.
 - Removal requests from creators: a takedown flow that deletes the post through the API.

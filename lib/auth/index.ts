@@ -5,7 +5,7 @@ import { forbidden, unauthorized } from "@/lib/http/errors";
 /**
  * Authentication. In production oauth2-proxy runs as a sidecar in front of the
  * app (which listens on 127.0.0.1 only) and passes the signed-in user as
- * headers; see docs/memes.md "Authentication". The app trusts them and
+ * headers; see docs/jester.md "Authentication". The app trusts them and
  * checks REQUIRED_GROUP again as defence in depth.
  */
 export type User = {

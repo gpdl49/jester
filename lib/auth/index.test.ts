@@ -9,8 +9,8 @@ import { ApiError } from "@/lib/http/errors";
 
 const proxy = {
 	AUTH_MODE: "proxy",
-	REQUIRED_GROUP: "memes",
-	ADMIN_GROUP: "memes-admin",
+	REQUIRED_GROUP: "jester",
+	ADMIN_GROUP: "jester-admin",
 	NODE_ENV: "production",
 } as const;
 
@@ -27,7 +27,7 @@ function statusOf(fn: () => unknown): number | undefined {
 
 describe("parseGroups", () => {
 	it("splits, trims and de-duplicates", () => {
-		expect(parseGroups(" memes, admin ,,memes")).toEqual(["memes", "admin"]);
+		expect(parseGroups(" jester, admin ,,jester")).toEqual(["jester", "admin"]);
 	});
 
 	it("returns [] for a missing or empty header", () => {
@@ -44,14 +44,14 @@ describe("parseProxyHeaders", () => {
 					"X-Forwarded-User": "312345678901234567",
 					"X-Forwarded-Email": "vidur@example.com",
 					"X-Forwarded-Preferred-Username": "vidur",
-					"X-Forwarded-Groups": "memes,homestacks:admin",
+					"X-Forwarded-Groups": "jester,homestacks:admin",
 				}),
 			),
 		).toEqual({
 			sub: "312345678901234567",
 			email: "vidur@example.com",
 			username: "vidur",
-			groups: ["memes", "homestacks:admin"],
+			groups: ["jester", "homestacks:admin"],
 		});
 	});
 
@@ -94,7 +94,7 @@ describe("authenticate", () => {
 				authenticate(
 					headers({
 						"X-Forwarded-User": "sub",
-						"X-Forwarded-Groups": "memes-admins",
+						"X-Forwarded-Groups": "jester-admins",
 					}),
 					proxy,
 				),
@@ -106,7 +106,7 @@ describe("authenticate", () => {
 		const user = authenticate(
 			headers({
 				"X-Forwarded-User": "sub",
-				"X-Forwarded-Groups": "a,memes",
+				"X-Forwarded-Groups": "a,jester",
 			}),
 			proxy,
 		);
@@ -120,7 +120,7 @@ describe("authenticate", () => {
 				AUTH_MODE: "dev",
 				NODE_ENV: "development",
 			}),
-		).toEqual(devUser("memes", "memes-admin"));
+		).toEqual(devUser("jester", "jester-admin"));
 	});
 
 	it("refuses dev mode in production", () => {

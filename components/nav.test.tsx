@@ -14,7 +14,7 @@ const me = (isAdmin: boolean): MeDto => ({
 	sub: "s",
 	email: null,
 	username: "u",
-	groups: ["memes"],
+	groups: ["jester"],
 	isAdmin,
 });
 
@@ -30,8 +30,8 @@ describe("navigation", () => {
 
 	it("marks post pages as part of the queue", () => {
 		expect(isActive("/posts/abc", "/queue")).toBe(true);
-		expect(isActive("/memes/abc", "/memes")).toBe(true);
-		expect(isActive("/memes", "/")).toBe(false);
+		expect(isActive("/jester/abc", "/jester")).toBe(true);
+		expect(isActive("/jester", "/")).toBe(false);
 	});
 
 	it.each([

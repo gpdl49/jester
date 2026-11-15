@@ -7,8 +7,8 @@ import { resetEnvCache } from "@/lib/env";
 process.env.DATABASE_URL =
 	process.env.TEST_DATABASE_URL || "postgresql://unset@localhost/unset";
 process.env.AUTH_MODE = "proxy";
-process.env.REQUIRED_GROUP = "memes";
-process.env.ADMIN_GROUP = "memes-admin";
+process.env.REQUIRED_GROUP = "jester";
+process.env.ADMIN_GROUP = "jester-admin";
 process.env.JOBS_ENABLED = "false";
 process.env.S3_ENDPOINT = "";
 resetEnvCache();

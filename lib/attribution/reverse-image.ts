@@ -1,6 +1,6 @@
 /**
  * Reverse image search provider interface and no-op implementation.
- * docs/memes.md "Attribution"
+ * docs/jester.md "Attribution"
  */
 
 export interface ReverseImageSearchResult {

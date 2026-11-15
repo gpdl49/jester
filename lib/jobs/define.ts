@@ -7,7 +7,7 @@ import type { z } from "zod";
  * instead of running with bad data.
  */
 export type JobDefinition<S extends z.ZodType = z.ZodType> = {
-	/** pg-boss queue name: `<area>.<action>` (docs/memes.md "Jobs"). */
+	/** pg-boss queue name: `<area>.<action>` (docs/jester.md "Jobs"). */
 	name: string;
 	schema: S;
 	handler: (data: z.output<S>, job: Job<unknown>) => Promise<void>;

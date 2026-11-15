@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Runtime configuration. The variables are the contract in docs/memes.md
+ * Runtime configuration. The variables are the contract in docs/jester.md
  * ("App environment"). Parsed lazily on first use, never at import time, so
  * `next build` and /api/healthz work without any of them set.
  */
@@ -19,7 +19,7 @@ const bool = (fallback: "true" | "false") =>
 		fallback,
 	);
 
-/** Model defaults (docs/memes.md). Prices per M tokens in/out, 2026-11. */
+/** Model defaults (docs/jester.md). Prices per M tokens in/out, 2026-11. */
 export const DEFAULT_TRIAGE_MODEL = "google/gemini-3.5-flash-lite"; // $0.30 / $2.50
 export const DEFAULT_ANALYSIS_MODEL = "google/gemini-3.8-flash"; // $0.83 / $4.13
 export const DEFAULT_ATTRIBUTION_MODEL = "google/gemini-3.8-flash"; // + web search
@@ -33,14 +33,14 @@ const envSchema = z
 		DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 		JOBS_ENABLED: bool("true"),
 		AUTH_MODE: withDefault(z.enum(["proxy", "dev"]), "proxy"),
-		REQUIRED_GROUP: withDefault(z.string().min(1), "memes"),
-		ADMIN_GROUP: withDefault(z.string().min(1), "memes-admin"),
+		REQUIRED_GROUP: withDefault(z.string().min(1), "jester"),
+		ADMIN_GROUP: withDefault(z.string().min(1), "jester-admin"),
 		PUBLIC_URL: withDefault(z.url(), "http://localhost:3000"),
 
 		AWS_REGION: withDefault(z.string().min(1), "eu-central-1"),
 		AWS_ACCESS_KEY_ID: optional(z.string()),
 		AWS_SECRET_ACCESS_KEY: optional(z.string()),
-		MEDIA_BUCKET: withDefault(z.string().min(1), "centerpoint-memes-media"),
+		MEDIA_BUCKET: withDefault(z.string().min(1), "centerpoint-jester-media"),
 		/** Set for MinIO in dev/tests; switches the S3 client to path-style. */
 		S3_ENDPOINT: optional(z.url({ protocol: /^https?$/ })),
 

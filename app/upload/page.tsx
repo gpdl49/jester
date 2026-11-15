@@ -4,7 +4,7 @@ import { UploadView } from "@/components/upload/upload-view";
 
 export const metadata: Metadata = { title: "Upload" };
 
-/** Owned by the `media` slice (docs/memes.md "Pages"). */
+/** Owned by the `media` slice (docs/jester.md "Pages"). */
 export default function Page() {
 	return (
 		<>

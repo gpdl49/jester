@@ -38,7 +38,7 @@ describeWithDb("settings service", () => {
 		const viewer = await getNonAdminViewer();
 		await expect(
 			updateSettings({ "prefilter.threshold": 0.5 }, viewer),
-		).rejects.toThrow(/Requires the memes-admin group/);
+		).rejects.toThrow(/Requires the jester-admin group/);
 	});
 
 	it("rejects unknown setting keys", async () => {

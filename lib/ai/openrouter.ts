@@ -74,8 +74,8 @@ export async function structuredCompletion(
 			Authorization: `Bearer ${request.apiKey}`,
 			"Content-Type": "application/json",
 			// OpenRouter app attribution.
-			"HTTP-Referer": "https://memes.vidur.xyz",
-			"X-Title": "memes",
+			"HTTP-Referer": "https://jester.vidur.xyz",
+			"X-Title": "jester",
 		},
 		body: JSON.stringify({
 			model: request.model,

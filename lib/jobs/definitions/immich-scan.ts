@@ -3,7 +3,7 @@ import { runScan } from "@/lib/immich/sync";
 import { defineJob } from "@/lib/jobs/define";
 
 /**
- * `immich.scan` (docs/memes.md "Jobs"). Owned by the `immich` slice: replace the
+ * `immich.scan` (docs/jester.md "Jobs"). Owned by the `immich` slice: replace the
  * handler body; keep the name and payload schema (they are the contract).
  */
 export const immichScan = defineJob({

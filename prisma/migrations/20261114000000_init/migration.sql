@@ -435,7 +435,7 @@ ALTER TABLE "post_items" ADD CONSTRAINT "post_items_meme_id_fkey" FOREIGN KEY ("
 ALTER TABLE "schedule_slots" ADD CONSTRAINT "schedule_slots_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "instagram_accounts"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 
--- Full-text search over memes (docs/memes.md); query with
+-- Full-text search over memes (docs/jester.md); query with
 -- "search" @@ websearch_to_tsquery('simple', $1) and rank with ts_rank.
 CREATE INDEX "memes_search_idx" ON "memes" USING GIN ("search");
 

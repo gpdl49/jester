@@ -3,7 +3,7 @@ import { runMemeAnalysis } from "@/lib/analysis/run";
 import { defineJob } from "@/lib/jobs/define";
 
 /**
- * `analysis.meme` (docs/memes.md "Jobs"). Owned by the `analysis` slice: replace the
+ * `analysis.meme` (docs/jester.md "Jobs"). Owned by the `analysis` slice: replace the
  * handler body; keep the name and payload schema (they are the contract).
  */
 export const analysisMeme = defineJob({

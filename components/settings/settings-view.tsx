@@ -49,7 +49,7 @@ export function SettingsView() {
 				<p className="mt-2 text-sm text-muted">
 					You need the{" "}
 					<code className="rounded bg-sunken px-1.5 py-0.5 font-mono">
-						memes-admin
+						jester-admin
 					</code>{" "}
 					group to view and change application settings.
 				</p>
@@ -214,7 +214,7 @@ function TriageSection({
 							className="size-4 rounded border-line text-accent focus:ring-accent"
 						/>
 						<span className="text-sm font-medium text-fg">
-							Enable Auto-Accept for high-confidence memes
+							Enable Auto-Accept for high-confidence jester
 						</span>
 					</label>
 
@@ -223,7 +223,7 @@ function TriageSection({
 							<div className="rounded-lg border border-danger/30 bg-danger-soft p-3 text-xs text-danger flex items-start gap-2">
 								<AlertTriangle className="size-4 shrink-0 mt-0.5" />
 								<div>
-									<strong>Permanent Deletion Warning:</strong> Accepted memes
+									<strong>Permanent Deletion Warning:</strong> Accepted jester
 									are imported to S3 and then{" "}
 									<strong>permanently deleted from Immich</strong>. Auto-accept
 									will bypass human review and trigger automatic deletion for
@@ -305,7 +305,7 @@ function SmartQueriesSection({
 						Immich Smart-Search Queries
 					</h2>
 					<p className="text-sm text-muted">
-						Semantic CLIP queries run against Immich to surface candidate memes
+						Semantic CLIP queries run against Immich to surface candidate jester
 						during sync.
 					</p>
 				</div>
@@ -382,7 +382,7 @@ function CaptionSection({
 
 	const sampleCaption = "When all tests pass on the first try";
 	const sampleCredit = "📸 @sample_creator";
-	const sampleHashtags = "#memes #programming #devhumor";
+	const sampleHashtags = "#jester #programming #devhumor";
 
 	const livePreview = template
 		.replace("{caption}", sampleCaption)

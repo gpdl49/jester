@@ -1,5 +1,5 @@
 /**
- * HTTP API response shapes (docs/memes.md "HTTP API"). Shared by route
+ * HTTP API response shapes (docs/jester.md "HTTP API"). Shared by route
  * handlers (server) and lib/client (browser). Dates are ISO 8601 strings.
  * This file is a contract: slices add nothing here without the coordinator.
  */

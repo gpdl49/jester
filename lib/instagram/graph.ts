@@ -96,7 +96,7 @@ export type PublishingLimitResult = {
 };
 
 export function createGraphClient(options: GraphClientOptions = {}) {
-	// INSTAGRAM_GRAPH_VERSION (docs/memes.md) unless a caller pins one
+	// INSTAGRAM_GRAPH_VERSION (docs/jester.md) unless a caller pins one
 	const version =
 		options.version ?? process.env.INSTAGRAM_GRAPH_VERSION ?? "v25.0";
 	const customFetch = options.fetch ?? fetch;

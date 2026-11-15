@@ -27,7 +27,7 @@ export type InstagramPreviewProps = {
 };
 
 export function InstagramPreview({
-	username = "memes",
+	username = "jester",
 	items,
 	renderedCaption,
 }: InstagramPreviewProps) {

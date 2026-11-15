@@ -3,7 +3,7 @@ import { publishPost } from "@/lib/instagram/publish";
 import { defineJob } from "@/lib/jobs/define";
 
 /**
- * `instagram.publish` (docs/memes.md "Jobs").
+ * `instagram.publish` (docs/jester.md "Jobs").
  * Publishes a queued post to Instagram via Meta Graph API with container polling,
  * rate limit deferral, and double-post protection.
  */

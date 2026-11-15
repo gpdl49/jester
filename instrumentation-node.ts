@@ -1,7 +1,7 @@
 /**
  * Node-only part of instrumentation.ts (kept separate so the Edge bundle
  * never sees process.exit). Starts the pg-boss worker when JOBS_ENABLED=true:
- * only the memes-worker Deployment sets it (docs/memes.md).
+ * only the jester-worker Deployment sets it (docs/jester.md).
  */
 export async function registerNode() {
 	const { env } = await import("@/lib/env");

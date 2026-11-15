@@ -6,7 +6,7 @@ import { jobDefinitions } from "@/lib/jobs/registry";
 /**
  * Starts the worker: creates each registered queue (idempotent), installs
  * cron schedules, and works the queues. Called from instrumentation.ts when
- * JOBS_ENABLED=true (the memes-worker Deployment).
+ * JOBS_ENABLED=true (the jester-worker Deployment).
  */
 export async function startWorker(): Promise<void> {
 	const boss = await getBoss();

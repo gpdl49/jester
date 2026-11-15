@@ -3,7 +3,7 @@ import { Prisma } from "@/lib/generated/prisma/client";
 
 /**
  * API errors. Every non-2xx JSON response has the contract shape
- * `{error, message}` (docs/memes.md, "HTTP API"): `error` is a stable
+ * `{error, message}` (docs/jester.md, "HTTP API"): `error` is a stable
  * machine code, `message` is for humans.
  */
 export type ErrorBody = { error: string; message: string };

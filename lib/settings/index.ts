@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 
 /**
- * Runtime settings admins change in the UI (docs/memes.md "App
+ * Runtime settings admins change in the UI (docs/jester.md "App
  * environment"). Stored one row per key in `settings`; a missing row means
  * the default. The schemas are the contract; the `admin` slice owns the API
  * and UI on top (lib/settings/service.ts, /api/settings, /settings).

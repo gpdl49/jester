@@ -1,1 +1,1 @@
-CREATE DATABASE memes_test OWNER memes;
+CREATE DATABASE jester_test OWNER jester;
