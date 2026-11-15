@@ -27,6 +27,7 @@ import { initialSelectionState, selectionReducer } from "./selection-reducer";
 import { TriageCard } from "./triage-card";
 import { TriageToolbar } from "./triage-toolbar";
 import { TriageUndoBanner } from "./triage-undo-banner";
+import { useDragSelect } from "./use-drag-select";
 import { useTriageKeyboard } from "./use-triage-keyboard";
 
 export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
@@ -271,6 +272,20 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 		enabled: visibleCandidates.length > 0,
 	});
 
+	// Drag-to-select (rubber band) over the card grid
+	const gridRef = useRef<HTMLDivElement | null>(null);
+	const selectedIdsRef = useRef(selection.selectedIds);
+	selectedIdsRef.current = selection.selectedIds;
+	const {
+		rect: dragRect,
+		onPointerDown: onGridPointerDown,
+		onClickCapture: onGridClickCapture,
+	} = useDragSelect({
+		containerRef: gridRef,
+		getSelectedIds: () => selectedIdsRef.current,
+		onSelectionChange: (ids) => dispatch({ type: "SET_SELECTION", ids }),
+	});
+
 	// Infinite scroll intersection observer
 	const loadMoreRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -326,32 +341,53 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 
 			{/* Grid of candidates */}
 			{visibleCandidates.length > 0 && (
-				<ul
-					aria-label="Triage candidates"
-					className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 p-0 m-0"
+				<div
+					ref={gridRef}
+					data-testid="triage-grid"
+					onPointerDown={onGridPointerDown}
+					onClickCapture={onGridClickCapture}
+					className="relative"
 				>
-					{visibleCandidates.map((candidate, idx) => (
-						<TriageCard
-							key={candidate.id}
-							candidate={candidate}
-							index={idx}
-							isFocused={idx === selection.focusedIndex}
-							isSelected={selection.selectedIds.has(candidate.id)}
-							isAdmin={isAdmin}
-							canDecide={canDecide}
-							onFocus={(index) => dispatch({ type: "FOCUS_INDEX", index })}
-							onToggleSelect={(id) => dispatch({ type: "TOGGLE_SELECT", id })}
-							onShiftClick={(toIndex) =>
-								dispatch({ type: "SELECT_RANGE", toIndex })
-							}
-							onAccept={handleAcceptSingle}
-							onReject={handleRejectSingle}
-							onReset={async (id) => {
-								await resetMutation.mutateAsync(id);
+					{dragRect && (
+						<div
+							data-testid="triage-drag-rect"
+							aria-hidden="true"
+							className="pointer-events-none absolute z-10 rounded-sm border border-accent bg-accent/15"
+							style={{
+								left: dragRect.left,
+								top: dragRect.top,
+								width: dragRect.width,
+								height: dragRect.height,
 							}}
 						/>
-					))}
-				</ul>
+					)}
+					<ul
+						aria-label="Triage candidates"
+						className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 p-0 m-0"
+					>
+						{visibleCandidates.map((candidate, idx) => (
+							<TriageCard
+								key={candidate.id}
+								candidate={candidate}
+								index={idx}
+								isFocused={idx === selection.focusedIndex}
+								isSelected={selection.selectedIds.has(candidate.id)}
+								isAdmin={isAdmin}
+								canDecide={canDecide}
+								onFocus={(index) => dispatch({ type: "FOCUS_INDEX", index })}
+								onToggleSelect={(id) => dispatch({ type: "TOGGLE_SELECT", id })}
+								onShiftClick={(toIndex) =>
+									dispatch({ type: "SELECT_RANGE", toIndex })
+								}
+								onAccept={handleAcceptSingle}
+								onReject={handleRejectSingle}
+								onReset={async (id) => {
+									await resetMutation.mutateAsync(id);
+								}}
+							/>
+						))}
+					</ul>
+				</div>
 			)}
 
 			{/* Infinite scroll loader trigger */}

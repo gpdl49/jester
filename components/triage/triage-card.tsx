@@ -73,6 +73,7 @@ export function TriageCard({
 	return (
 		<li
 			data-testid={`triage-card-${candidate.id}`}
+			data-card-id={candidate.id}
 			onClick={handleClick}
 			onKeyDown={(e) => {
 				if (e.key === "Enter" || e.key === " ") {
@@ -94,6 +95,7 @@ export function TriageCard({
 					src={candidate.previewUrl}
 					alt={candidate.originalFileName}
 					loading="lazy"
+					draggable={false}
 					className="size-full object-cover transition duration-200 group-hover:scale-102"
 				/>
 

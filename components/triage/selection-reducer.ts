@@ -13,6 +13,7 @@ export type SelectionAction =
 	| { type: "TOGGLE_SELECT"; id: string }
 	| { type: "SELECT_RANGE"; toIndex: number }
 	| { type: "SELECT_ALL" }
+	| { type: "SET_SELECTION"; ids: string[] }
 	| { type: "CLEAR_SELECTION" }
 	| { type: "REMOVE_ITEMS"; ids: string[] };
 
@@ -131,6 +132,18 @@ export function selectionReducer(
 			return {
 				...state,
 				selectedIds: new Set(state.itemIds),
+			};
+		}
+
+		case "SET_SELECTION": {
+			const known = new Set(state.itemIds);
+			const ids = action.ids.filter((id) => known.has(id));
+			const lastId = ids[ids.length - 1];
+			const last = lastId ? state.itemIds.indexOf(lastId) : -1;
+			return {
+				...state,
+				selectedIds: new Set(ids),
+				anchorIndex: last >= 0 ? last : state.anchorIndex,
 			};
 		}
 
