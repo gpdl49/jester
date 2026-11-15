@@ -280,7 +280,10 @@ export type InstagramAccountDto = {
 	id: string;
 	igUserId: string;
 	username: string;
-	tokenExpiresAt: string;
+	/** null = the token does not expire */
+	tokenExpiresAt: string | null;
+	/** Meta rejected the token; reconnect the account */
+	needsReconnect: boolean;
 	isDefault: boolean;
 	createdAt: string;
 };

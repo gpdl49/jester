@@ -72,9 +72,11 @@ const envSchema = z
 
 		INSTAGRAM_APP_ID: optional(z.string()),
 		INSTAGRAM_APP_SECRET: optional(z.string()),
+		/** Login configuration id from the Meta dashboard (Unified Login). */
+		INSTAGRAM_CONFIG_ID: optional(z.string()),
 		INSTAGRAM_GRAPH_VERSION: withDefault(
 			z.string().regex(/^v\d+\.\d+$/),
-			"v25.0",
+			"v27.0",
 		),
 		SCHEDULE_TIMEZONE: withDefault(z.string().min(1), "Asia/Kolkata"),
 	})
@@ -158,5 +160,6 @@ export const features = (e: Env = env()) => ({
 	instagram:
 		Boolean(e.INSTAGRAM_APP_ID) &&
 		Boolean(e.INSTAGRAM_APP_SECRET) &&
+		Boolean(e.INSTAGRAM_CONFIG_ID) &&
 		Boolean(e.TOKEN_ENCRYPTION_KEY),
 });

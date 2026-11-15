@@ -333,7 +333,10 @@ model InstagramAccount {
   username       String
   /// lib/instagram/crypto encrypt(): base64(iv | tag | ciphertext), AES-256-GCM
   accessTokenEnc String   @map("access_token_enc")
-  tokenExpiresAt DateTime @map("token_expires_at")
+  /// null = the token does not expire (system-user token, Unified Login)
+  tokenExpiresAt DateTime? @map("token_expires_at")
+  /// set when Meta rejects the token (error 190); cleared by reconnecting
+  needsReconnect Boolean  @default(false) @map("needs_reconnect")
   connectedById  String?  @map("connected_by_id") @db.Uuid
   isDefault      Boolean  @default(false) @map("is_default")
   createdAt      DateTime @default(now()) @map("created_at")
