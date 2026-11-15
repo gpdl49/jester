@@ -159,6 +159,65 @@ describe("TriageView component", () => {
 		expect(screen.getByText("1 selected")).toBeInTheDocument();
 	});
 
+	it("selects the cards a drag rectangle touches", async () => {
+		mockApi({
+			"GET /api/triage": {
+				items: [candidate1, candidate2, candidate3],
+				nextCursor: null,
+			},
+		});
+		renderWithQuery(<TriageView isAdmin={false} />);
+		await screen.findByText("funny_cat.png");
+
+		// jsdom has no layout: lay the cards out in a row, 100px wide each.
+		const grid = screen.getByTestId("triage-grid");
+		const box = (left: number, width: number) =>
+			({
+				left,
+				top: 0,
+				right: left + width,
+				bottom: 100,
+				width,
+				height: 100,
+				x: left,
+				y: 0,
+				toJSON: () => ({}),
+			}) as DOMRect;
+		grid.getBoundingClientRect = () => box(0, 300);
+		[candidate1, candidate2, candidate3].forEach((c, i) => {
+			screen.getByTestId(`triage-card-${c.id}`).getBoundingClientRect = () =>
+				box(i * 100, 90);
+		});
+
+		// Drag from inside card 1 into card 2.
+		// jsdom has no PointerEvent, so send mouse events under the pointer names.
+		fireEvent(
+			grid,
+			new MouseEvent("pointerdown", {
+				bubbles: true,
+				button: 0,
+				clientX: 80,
+				clientY: 50,
+			}),
+		);
+		act(() => {
+			fireEvent(
+				window,
+				new MouseEvent("pointermove", { clientX: 150, clientY: 60 }),
+			);
+		});
+		expect(screen.getByTestId("triage-drag-rect")).toBeInTheDocument();
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+		act(() => {
+			fireEvent(window, new MouseEvent("pointerup"));
+		});
+		expect(screen.queryByTestId("triage-drag-rect")).not.toBeInTheDocument();
+
+		// The click that ends a drag must not change the selection.
+		fireEvent.click(screen.getByTestId(`triage-card-${candidate3.id}`));
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+	});
+
 	it("performs optimistic removal with 5s undo window", async () => {
 		vi.useFakeTimers();
 		const api = mockApi({

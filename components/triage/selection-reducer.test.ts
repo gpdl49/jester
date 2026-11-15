@@ -110,4 +110,15 @@ describe("selectionReducer", () => {
 		expect(state.itemIds).toEqual([]);
 		expect(state.focusedIndex).toBe(-1);
 	});
+
+	it("SET_SELECTION replaces the selection and ignores unknown ids", () => {
+		let state = initialSelectionState(["a", "b", "c"]);
+		state = selectionReducer(state, { type: "TOGGLE_SELECT", id: "a" });
+		state = selectionReducer(state, {
+			type: "SET_SELECTION",
+			ids: ["b", "c", "zzz"],
+		});
+		expect([...state.selectedIds]).toEqual(["b", "c"]);
+		expect(state.anchorIndex).toBe(2);
+	});
 });
