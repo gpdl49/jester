@@ -7,6 +7,7 @@ import {
 	GraphError,
 } from "@/lib/instagram/graph";
 import { renderPost } from "@/lib/instagram/render";
+import { markNeedsReconnect } from "@/lib/instagram/service";
 import { renderCaption } from "@/lib/posts/caption";
 import { INSTAGRAM_URL_TTL_SECONDS, instagramKey, presignGet } from "@/lib/s3";
 import { getSetting } from "@/lib/settings";
@@ -114,6 +115,7 @@ export async function publishPost(
 		});
 	};
 
+	let accountForFlag: { id: string; username: string } | null = null;
 	try {
 		// Resolve the Instagram account
 		let account = post.account;
@@ -128,13 +130,14 @@ export async function publishPost(
 					where: { isDefault: true },
 				});
 			}
-			if (!account) {
+			// Without a default, only a sole account is unambiguous.
+			if (!account && (await db().instagramAccount.count()) === 1) {
 				account = await db().instagramAccount.findFirst();
 			}
 		}
 
 		if (!account) {
-			const errorMsg = "no Instagram account";
+			const errorMsg = "no Instagram account (choose a default in Settings)";
 			await db().post.update({
 				where: { id: postId },
 				data: {
@@ -152,7 +155,12 @@ export async function publishPost(
 			return;
 		}
 
-		if (account.tokenExpiresAt.getTime() <= nowFn().getTime()) {
+		accountForFlag = { id: account.id, username: account.username };
+		if (
+			account.needsReconnect ||
+			(account.tokenExpiresAt &&
+				account.tokenExpiresAt.getTime() <= nowFn().getTime())
+		) {
 			const errorMsg = "Instagram token expired: reconnect the account";
 			await db().post.update({
 				where: { id: postId },
@@ -411,6 +419,9 @@ export async function publishPost(
 		});
 	} catch (err) {
 		if (err instanceof GraphError && err.isTokenExpired) {
+			if (accountForFlag) {
+				await markNeedsReconnect(accountForFlag.id, accountForFlag.username);
+			}
 			const errorMsg = `Instagram token expired: ${err.message}`;
 			await db().post.update({
 				where: { id: postId },

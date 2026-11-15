@@ -6,8 +6,9 @@ import { DELETE as deleteAccountRoute } from "@/app/api/instagram/accounts/[id]/
 import { GET as getAccounts } from "@/app/api/instagram/accounts/route";
 import { GET as oauthCallback } from "@/app/api/instagram/callback/route";
 import { GET as oauthConnect } from "@/app/api/instagram/connect/route";
+import { db } from "@/lib/db";
 import { resetEnvCache } from "@/lib/env";
-import { encrypt } from "@/lib/instagram/crypto";
+import { decrypt, encrypt } from "@/lib/instagram/crypto";
 import { describeWithDb, resetDb } from "@/test/helpers/db";
 import { createInstagramAccount } from "@/test/helpers/factories";
 import { apiRequest, json, routeParams, TEST_USER } from "@/test/helpers/http";
@@ -21,6 +22,7 @@ describeWithDb("instagram oauth and accounts routes", () => {
 		await resetDb();
 		process.env.INSTAGRAM_APP_ID = "test_app_id";
 		process.env.INSTAGRAM_APP_SECRET = "test_app_secret";
+		process.env.INSTAGRAM_CONFIG_ID = "test_config_id";
 		process.env.TOKEN_ENCRYPTION_KEY = validKey;
 		process.env.PUBLIC_URL = "http://localhost:3000";
 		resetEnvCache();
@@ -56,18 +58,41 @@ describeWithDb("instagram oauth and accounts routes", () => {
 			expect(body.error).toBe("feature_disabled");
 		});
 
-		it("sets state cookie and redirects to Instagram authorize URL", async () => {
+		it("returns 503 without the login configuration id", async () => {
+			delete process.env.INSTAGRAM_CONFIG_ID;
+			resetEnvCache();
+			const res = await oauthConnect(
+				apiRequest("/api/instagram/connect", { user: ADMIN_USER }),
+				{},
+			);
+			expect(res.status).toBe(503);
+		});
+
+		it("sets state cookie and redirects to the Facebook Login for Business dialog", async () => {
 			const req = apiRequest("/api/instagram/connect", { user: ADMIN_USER });
 			const res = await oauthConnect(req, {});
 
 			expect(res.status).toBe(302);
-			const location = res.headers.get("Location");
-			expect(location).toContain("https://www.instagram.com/oauth/authorize");
-			expect(location).toContain("client_id=test_app_id");
-			expect(location).toContain("response_type=code");
+			const url = new URL(res.headers.get("Location") as string);
+			expect(url.origin + url.pathname).toBe(
+				"https://www.facebook.com/v27.0/dialog/oauth",
+			);
+			expect(Object.fromEntries(url.searchParams)).toEqual({
+				client_id: "test_app_id",
+				config_id: "test_config_id",
+				redirect_uri: "http://localhost:3000/api/instagram/callback",
+				response_type: "code",
+				override_default_response_type: "true",
+				state: url.searchParams.get("state"),
+			});
+			// permissions come from the configuration, not a scope parameter
+			expect(url.searchParams.has("scope")).toBe(false);
 
 			const setCookie = res.headers.get("Set-Cookie");
 			expect(setCookie).toContain("ig_oauth_state=");
+			expect(setCookie).toContain(
+				`ig_oauth_state=${url.searchParams.get("state")}`,
+			);
 			expect(setCookie).toContain("HttpOnly");
 			expect(setCookie).toContain("SameSite=Lax");
 		});
@@ -138,62 +163,179 @@ describeWithDb("instagram oauth and accounts routes", () => {
 			expect(res.status).toBe(400);
 		});
 
-		it("exchanges code, upserts account, audits and redirects to /settings", async () => {
-			const state = "valid_state_456";
-			const mockFetch = vi.fn(async (url: string | URL | Request) => {
-				const urlStr = String(url);
-				if (urlStr.includes("api.instagram.com/oauth/access_token")) {
-					return Response.json({
-						access_token: "short_lived_1",
-						user_id: 1784149999,
-					});
+		function graphStub(opts: {
+			accounts: Array<{ id: string; username: string }>;
+			debug?: unknown;
+		}) {
+			const urls: string[] = [];
+			const fn = vi.fn(async (url: string | URL | Request) => {
+				const u = new URL(String(url));
+				urls.push(String(url));
+				if (u.pathname.endsWith("/oauth/access_token")) {
+					return Response.json({ access_token: "suat_secret_token" });
 				}
-				if (urlStr.includes("graph.instagram.com/access_token")) {
-					return Response.json({
-						access_token: "long_lived_secret_token",
-						token_type: "bearer",
-						expires_in: 5184000,
-					});
+				if (u.pathname.endsWith("/debug_token")) {
+					return Response.json(
+						opts.debug ?? { data: { is_valid: true, expires_at: 0 } },
+					);
 				}
-				if (urlStr.includes("/me?fields=user_id,username")) {
-					return Response.json({
-						id: "1784149999",
-						user_id: "1784149999",
-						username: "great_memes",
-					});
+				if (u.pathname.endsWith("/me/assigned_instagram_accounts")) {
+					return Response.json({ data: opts.accounts });
 				}
 				return new Response(null, { status: 404 });
 			});
+			vi.stubGlobal("fetch", fn);
+			return { fn, urls };
+		}
 
-			vi.stubGlobal("fetch", mockFetch);
-
-			const req = apiRequest(
-				`/api/instagram/callback?code=auth_code_xyz&state=${state}`,
-				{
-					user: ADMIN_USER,
-					headers: { Cookie: `ig_oauth_state=${state}` },
-				},
+		async function callback(state = "valid_state_456") {
+			return oauthCallback(
+				apiRequest(
+					`/api/instagram/callback?code=auth_code_xyz&state=${state}`,
+					{
+						user: ADMIN_USER,
+						headers: { Cookie: `ig_oauth_state=${state}` },
+					},
+				),
+				{},
 			);
+		}
 
-			const res = await oauthCallback(req, {});
+		async function listAccounts() {
+			return json<
+				Array<{
+					id: string;
+					username: string;
+					isDefault: boolean;
+					tokenExpiresAt: string | null;
+					needsReconnect: boolean;
+				}>
+			>(
+				await getAccounts(
+					apiRequest("/api/instagram/accounts", { user: ADMIN_USER }),
+					{},
+				),
+			);
+		}
+
+		it("one account: exchanges the code, stores it encrypted, makes it default, audits", async () => {
+			const g = graphStub({
+				accounts: [{ id: "1784149999", username: "great_memes" }],
+			});
+			const res = await callback();
 			expect(res.status).toBe(302);
 			expect(res.headers.get("Location")).toBe(
 				"http://localhost:3000/settings?instagram=connected",
 			);
 			expect(res.headers.get("Set-Cookie")).toContain("Max-Age=0");
+			// every call is on graph.facebook.com
+			for (const u of g.urls)
+				expect(u).toContain("https://graph.facebook.com/v27.0/");
+			expect(g.urls[0]).toContain("client_id=test_app_id");
+			expect(g.urls[0]).toContain("client_secret=test_app_secret");
+			expect(g.urls[0]).toContain("code=auth_code_xyz");
 
-			// Check database account
-			const accountsRes = await getAccounts(
-				apiRequest("/api/instagram/accounts", { user: ADMIN_USER }),
-				{},
-			);
-			const accounts =
-				await json<Array<{ username: string; isDefault: boolean }>>(
-					accountsRes,
-				);
+			const accounts = await listAccounts();
 			expect(accounts).toHaveLength(1);
 			expect(accounts[0]?.username).toBe("great_memes");
 			expect(accounts[0]?.isDefault).toBe(true);
+			expect(accounts[0]?.tokenExpiresAt).toBeNull();
+			expect(accounts[0]?.needsReconnect).toBe(false);
+			expect(JSON.stringify(accounts)).not.toContain("suat_secret_token");
+
+			const row = await db().instagramAccount.findFirstOrThrow();
+			expect(row.accessTokenEnc).not.toContain("suat_secret_token");
+			expect(decrypt(row.accessTokenEnc)).toBe("suat_secret_token");
+			expect(row.igUserId).toBe("1784149999");
+			expect(
+				await db().auditEvent.count({ where: { action: "instagram.connect" } }),
+			).toBe(1);
+		});
+
+		it("records the token expiry when Meta gives one", async () => {
+			graphStub({
+				accounts: [{ id: "1", username: "a" }],
+				debug: { data: { is_valid: true, expires_at: 1900000000 } },
+			});
+			await callback();
+			expect((await listAccounts())[0]?.tokenExpiresAt).toBe(
+				new Date(1900000000 * 1000).toISOString(),
+			);
+		});
+
+		it("several accounts: stores all, picks none, asks the admin to choose", async () => {
+			graphStub({
+				accounts: [
+					{ id: "1", username: "first" },
+					{ id: "2", username: "second" },
+				],
+			});
+			const res = await callback();
+			expect(res.headers.get("Location")).toBe(
+				"http://localhost:3000/settings?instagram=choose",
+			);
+			const accounts = await listAccounts();
+			expect(accounts.map((a) => a.username).sort()).toEqual([
+				"first",
+				"second",
+			]);
+			expect(accounts.some((a) => a.isDefault)).toBe(false);
+		});
+
+		it("several accounts with an existing default keeps that default", async () => {
+			await createInstagramAccount({
+				igUserId: "2",
+				username: "second",
+				isDefault: true,
+			});
+			graphStub({
+				accounts: [
+					{ id: "1", username: "first" },
+					{ id: "2", username: "second" },
+				],
+			});
+			const res = await callback();
+			expect(res.headers.get("Location")).toContain("instagram=connected");
+			const accounts = await listAccounts();
+			expect(accounts.find((a) => a.isDefault)?.username).toBe("second");
+		});
+
+		it("zero accounts: stores nothing and says so", async () => {
+			graphStub({ accounts: [] });
+			const res = await callback();
+			expect(res.headers.get("Location")).toBe(
+				"http://localhost:3000/settings?instagram=no_accounts",
+			);
+			expect(await listAccounts()).toHaveLength(0);
+		});
+
+		it("reconnecting clears the needs-reconnect flag", async () => {
+			await createInstagramAccount({
+				igUserId: "1",
+				username: "a",
+				needsReconnect: true,
+				isDefault: true,
+			});
+			graphStub({ accounts: [{ id: "1", username: "a" }] });
+			await callback();
+			const accounts = await listAccounts();
+			expect(accounts).toHaveLength(1);
+			expect(accounts[0]?.needsReconnect).toBe(false);
+		});
+
+		it("a failed code exchange stores nothing", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					Response.json(
+						{ error: { message: "Invalid verification code", code: 100 } },
+						{ status: 400 },
+					),
+				),
+			);
+			const res = await callback();
+			expect(res.status).toBeGreaterThanOrEqual(400);
+			expect(await listAccounts()).toHaveLength(0);
 		});
 	});
 
@@ -324,6 +466,32 @@ describeWithDb("instagram oauth and accounts routes", () => {
 			expect(res.status).toBe(200);
 			const limit = await json<{ used: number; total: number }>(res);
 			expect(limit).toEqual({ used: 18, total: 100 });
+		});
+
+		it("flags the account for reconnection on error 190", async () => {
+			const acc = await createInstagramAccount({
+				igUserId: "ig_revoked",
+				accessTokenEnc: encrypt("tok", validKey),
+			});
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					Response.json(
+						{ error: { message: "Session invalid", code: 190 } },
+						{ status: 400 },
+					),
+				),
+			);
+			await getLimitRoute(
+				apiRequest(`/api/instagram/accounts/${acc.id}/limit`, {
+					user: TEST_USER,
+				}),
+				routeParams({ id: acc.id }),
+			);
+			const row = await db().instagramAccount.findUniqueOrThrow({
+				where: { id: acc.id },
+			});
+			expect(row.needsReconnect).toBe(true);
 		});
 	});
 });

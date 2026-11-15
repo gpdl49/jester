@@ -50,7 +50,7 @@ function graphStub(opts: {
 					status_code: opts.containerStatus ?? "FINISHED",
 				});
 			}
-			if (u.includes("/media?fields=id,caption,timestamp,permalink")) {
+			if (u.includes("/media?fields=id%2Ccaption%2Ctimestamp%2Cpermalink")) {
 				return Response.json({ data: opts.recent ?? [] });
 			}
 			if (u.endsWith("/media") && init?.method === "POST") {
@@ -270,5 +270,41 @@ describeWithDb("instagram publisher: double and lost post safety", () => {
 		const row = await db().post.findUniqueOrThrow({ where: { id: post.id } });
 		expect(row.status).toBe("failed");
 		expect(row.error).toContain("token expired");
+	});
+
+	it("fails an account flagged for reconnection without calling Instagram", async () => {
+		const { post } = await setup({}, { needsReconnect: true });
+		const { fetchFn } = graphStub({});
+		await publishPost(post.id, { fetch: fetchFn });
+		expect(fetchFn).not.toHaveBeenCalled();
+		const row = await db().post.findUniqueOrThrow({ where: { id: post.id } });
+		expect(row.status).toBe("failed");
+		expect(row.error).toContain("reconnect");
+	});
+
+	it("publishes with a non-expiring token (tokenExpiresAt null)", async () => {
+		const { post } = await setup({}, { tokenExpiresAt: null });
+		const { fetchFn } = graphStub({});
+		await publishPost(post.id, { fetch: fetchFn });
+		const row = await db().post.findUniqueOrThrow({ where: { id: post.id } });
+		expect(row.status).toBe("published");
+	});
+
+	it("flags the account and fails the post on error 190 from Graph", async () => {
+		const { post, account } = await setup({}, {});
+		const fetchFn = vi.fn(async () =>
+			Response.json(
+				{ error: { message: "Error validating access token", code: 190 } },
+				{ status: 400 },
+			),
+		) as unknown as typeof fetch;
+		await publishPost(post.id, { fetch: fetchFn });
+		const row = await db().post.findUniqueOrThrow({ where: { id: post.id } });
+		expect(row.status).toBe("failed");
+		expect(row.error).toContain("token expired");
+		const acc = await db().instagramAccount.findUniqueOrThrow({
+			where: { id: account.id },
+		});
+		expect(acc.needsReconnect).toBe(true);
 	});
 });

@@ -1,76 +1,85 @@
 import { audit } from "@/lib/audit";
 import { db } from "@/lib/db";
-import { decrypt, encrypt } from "@/lib/instagram/crypto";
-import { createGraphClient, type GraphClient } from "@/lib/instagram/graph";
+import { env } from "@/lib/env";
+import { decrypt } from "@/lib/instagram/crypto";
+import {
+	createGraphClient,
+	type GraphClient,
+	GraphError,
+} from "@/lib/instagram/graph";
+import { markNeedsReconnect } from "@/lib/instagram/service";
 
-export type RefreshOptions = {
-	now?: () => Date;
+export type TokenCheckOptions = {
 	graphClient?: GraphClient;
 	fetch?: typeof fetch;
 };
 
 /**
- * Refreshes long-lived access tokens for all Instagram accounts expiring
- * within the next 10 days.
+ * Unified Login tokens are Business Integration System User tokens: they are
+ * never refreshed here. Instead each account's token is inspected with
+ * `debug_token`: an invalid or revoked token flags the account for
+ * reconnection, and the stored expiry (null = never expires) is kept in sync.
+ * Returns the number of accounts newly flagged.
  */
-export async function refreshExpiringTokens(
-	options: RefreshOptions = {},
+export async function checkAccountTokens(
+	options: TokenCheckOptions = {},
 ): Promise<number> {
-	const nowFn = options.now ?? (() => new Date());
-	const tenDaysFromNow = new Date(nowFn().getTime() + 10 * 24 * 60 * 60 * 1000);
+	const e = env();
+	const appId = e.INSTAGRAM_APP_ID;
+	const appSecret = e.INSTAGRAM_APP_SECRET;
+	if (!appId || !appSecret) return 0;
 
-	const expiringAccounts = await db().instagramAccount.findMany({
-		where: {
-			tokenExpiresAt: {
-				lte: tenDaysFromNow,
-			},
-		},
+	const accounts = await db().instagramAccount.findMany({
+		where: { needsReconnect: false },
 	});
+	const client =
+		options.graphClient ?? createGraphClient({ fetch: options.fetch });
 
-	let refreshedCount = 0;
-
-	for (const account of expiringAccounts) {
+	let flagged = 0;
+	for (const account of accounts) {
 		try {
-			const accessToken = decrypt(account.accessTokenEnc);
-			const client =
-				options.graphClient ??
-				createGraphClient({
-					fetch: options.fetch,
-					defaultToken: accessToken,
-					defaultIgUserId: account.igUserId,
+			const info = await client.debugToken({
+				appId,
+				appSecret,
+				inputToken: decrypt(account.accessTokenEnc),
+			});
+			if (!info.isValid) {
+				await markNeedsReconnect(account.id, account.username);
+				flagged++;
+				continue;
+			}
+			if (info.expiresAt?.getTime() !== account.tokenExpiresAt?.getTime()) {
+				await db().instagramAccount.update({
+					where: { id: account.id },
+					data: { tokenExpiresAt: info.expiresAt },
 				});
-
-			const res = await client.refreshToken({ accessToken });
-			const newAccessTokenEnc = encrypt(res.accessToken);
-			const newExpiresAt = new Date(nowFn().getTime() + res.expiresIn * 1000);
-
-			await db().instagramAccount.update({
-				where: { id: account.id },
-				data: {
-					accessTokenEnc: newAccessTokenEnc,
-					tokenExpiresAt: newExpiresAt,
-				},
-			});
-
-			await audit({
-				actorId: null,
-				action: "instagram.token_refresh",
-				subjectType: "instagram_account",
-				subjectId: account.id,
-				data: {
-					username: account.username,
-					tokenExpiresAt: newExpiresAt.toISOString(),
-				},
-			});
-
-			refreshedCount++;
+			}
 		} catch (err) {
+			if (err instanceof GraphError && err.isTokenExpired) {
+				await markNeedsReconnect(account.id, account.username);
+				flagged++;
+				continue;
+			}
 			console.error(
-				`Failed to refresh token for Instagram account ${account.username} (${account.id}):`,
-				err,
+				`Failed to check token for Instagram account ${account.username} (${account.id}):`,
+				err instanceof Error ? err.message : String(err),
 			);
 		}
 	}
-
-	return refreshedCount;
+	// A token past its known expiry also needs reconnecting.
+	const lapsed = await db().instagramAccount.findMany({
+		where: { needsReconnect: false, tokenExpiresAt: { lte: new Date() } },
+	});
+	for (const account of lapsed) {
+		await markNeedsReconnect(account.id, account.username);
+		flagged++;
+	}
+	await audit({
+		actorId: null,
+		action: "instagram.token_check",
+		subjectType: "instagram_account",
+		subjectId: null,
+		data: { checked: accounts.length, flagged },
+	});
+	return flagged;
 }

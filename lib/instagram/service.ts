@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { env, features } from "@/lib/env";
 import { badRequest, featureDisabled, notFound } from "@/lib/http/errors";
 import { decrypt, encrypt } from "@/lib/instagram/crypto";
-import { createGraphClient } from "@/lib/instagram/graph";
+import { createGraphClient, GraphError } from "@/lib/instagram/graph";
 
 function safeEqual(a: string, b: string): boolean {
 	const ab = Buffer.from(a);
@@ -23,7 +23,8 @@ export function toAccountDto(row: {
 	id: string;
 	igUserId: string;
 	username: string;
-	tokenExpiresAt: Date;
+	tokenExpiresAt: Date | null;
+	needsReconnect: boolean;
 	isDefault: boolean;
 	createdAt: Date;
 }): InstagramAccountDto {
@@ -31,7 +32,8 @@ export function toAccountDto(row: {
 		id: row.id,
 		igUserId: row.igUserId,
 		username: row.username,
-		tokenExpiresAt: row.tokenExpiresAt.toISOString(),
+		tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null,
+		needsReconnect: row.needsReconnect,
 		isDefault: row.isDefault,
 		createdAt: row.createdAt.toISOString(),
 	};
@@ -135,7 +137,34 @@ export async function getAccountLimit(
 		defaultIgUserId: account.igUserId,
 	});
 
-	return client.publishingLimit(account.igUserId, token);
+	try {
+		return await client.publishingLimit(account.igUserId, token);
+	} catch (err) {
+		if (err instanceof GraphError && err.isTokenExpired) {
+			await markNeedsReconnect(account.id, account.username);
+		}
+		throw err;
+	}
+}
+
+/** Meta rejected the token (error 190): flag the account for reconnection. */
+export async function markNeedsReconnect(
+	id: string,
+	username: string,
+): Promise<void> {
+	const res = await db().instagramAccount.updateMany({
+		where: { id, needsReconnect: false },
+		data: { needsReconnect: true },
+	});
+	if (res.count > 0) {
+		await audit({
+			actorId: null,
+			action: "instagram.token_invalid",
+			subjectType: "instagram_account",
+			subjectId: id,
+			data: { username },
+		});
+	}
 }
 
 export type OAuthCallbackInput = {
@@ -146,9 +175,15 @@ export type OAuthCallbackInput = {
 	customFetch?: typeof fetch;
 };
 
+export type OAuthCallbackResult = {
+	accounts: InstagramAccountDto[];
+	/** More than one account is connected and none is the default yet. */
+	needsChoice: boolean;
+};
+
 export async function handleOAuthCallback(
 	input: OAuthCallbackInput,
-): Promise<InstagramAccountDto> {
+): Promise<OAuthCallbackResult> {
 	checkInstagramFeature();
 
 	if (!input.cookieState || !safeEqual(input.state, input.cookieState)) {
@@ -156,61 +191,89 @@ export async function handleOAuthCallback(
 	}
 
 	const e = env();
+	const appId = e.INSTAGRAM_APP_ID as string;
+	const appSecret = e.INSTAGRAM_APP_SECRET as string;
 	const client = createGraphClient({ fetch: input.customFetch });
-	const redirectUri = `${e.PUBLIC_URL}/api/instagram/callback`;
 
-	// Exchange code for short-lived token
-	const shortTokenRes = await client.exchangeCode({
-		clientId: e.INSTAGRAM_APP_ID as string,
-		clientSecret: e.INSTAGRAM_APP_SECRET as string,
-		redirectUri,
+	// Code -> Business Integration System User access token.
+	const exchanged = await client.exchangeCode({
+		clientId: appId,
+		clientSecret: appSecret,
 		code: input.code,
 	});
+	const token = exchanged.accessToken;
 
-	// Exchange short-lived token for long-lived token (60 days)
-	const longTokenRes = await client.exchangeLongLived({
-		clientSecret: e.INSTAGRAM_APP_SECRET as string,
-		accessToken: shortTokenRes.accessToken,
+	// Reachable Instagram professional accounts (the client chose them in the
+	// login dialog).
+	const reachable = await client.assignedInstagramAccounts(token);
+	if (reachable.length === 0) return { accounts: [], needsChoice: false };
+
+	// `expires_at` 0 means the token never expires; fall back to `expires_in`.
+	let tokenExpiresAt: Date | null =
+		exchanged.expiresIn && exchanged.expiresIn > 0
+			? new Date(Date.now() + exchanged.expiresIn * 1000)
+			: null;
+	try {
+		const info = await client.debugToken({
+			appId,
+			appSecret,
+			inputToken: token,
+		});
+		tokenExpiresAt = info.expiresAt;
+	} catch {
+		// keep the fallback; the daily check will fill it in
+	}
+
+	const accessTokenEnc = encrypt(token);
+	const stored = await db().$transaction(async (tx) => {
+		const rows = [];
+		for (const a of reachable) {
+			rows.push(
+				await tx.instagramAccount.upsert({
+					where: { igUserId: a.id },
+					create: {
+						igUserId: a.id,
+						username: a.username,
+						accessTokenEnc,
+						tokenExpiresAt,
+						connectedById: input.actorId,
+					},
+					update: {
+						username: a.username,
+						accessTokenEnc,
+						tokenExpiresAt,
+						needsReconnect: false,
+						connectedById: input.actorId,
+					},
+				}),
+			);
+		}
+		// Never pick between several accounts silently: the admin chooses.
+		const hasDefault = await tx.instagramAccount.count({
+			where: { isDefault: true },
+		});
+		const total = await tx.instagramAccount.count();
+		if (hasDefault === 0 && total === 1 && rows[0]) {
+			rows[0] = await tx.instagramAccount.update({
+				where: { id: rows[0].id },
+				data: { isDefault: true },
+			});
+		}
+		return { rows, needsChoice: hasDefault === 0 && total > 1 };
 	});
 
-	// Retrieve user profile (user_id, username)
-	const profile = await client.me(longTokenRes.accessToken);
+	for (const account of stored.rows) {
+		await audit({
+			actorId: input.actorId,
+			action: "instagram.connect",
+			subjectType: "instagram_account",
+			subjectId: account.id,
+			data: { username: account.username, igUserId: account.igUserId },
+		});
+	}
 
-	const tokenExpiresAt = new Date(Date.now() + longTokenRes.expiresIn * 1000);
-	const accessTokenEnc = encrypt(longTokenRes.accessToken);
-
-	// The first account becomes default
-	const existingCount = await db().instagramAccount.count();
-	const existingDefault = await db().instagramAccount.findFirst({
-		where: { isDefault: true },
-	});
-	const isDefault = existingCount === 0 || !existingDefault;
-
-	const account = await db().instagramAccount.upsert({
-		where: { igUserId: profile.userId },
-		create: {
-			igUserId: profile.userId,
-			username: profile.username,
-			accessTokenEnc,
-			tokenExpiresAt,
-			connectedById: input.actorId,
-			isDefault,
-		},
-		update: {
-			username: profile.username,
-			accessTokenEnc,
-			tokenExpiresAt,
-			connectedById: input.actorId,
-		},
-	});
-
-	await audit({
-		actorId: input.actorId,
-		action: "instagram.connect",
-		subjectType: "instagram_account",
-		subjectId: account.id,
-		data: { username: account.username, igUserId: account.igUserId },
-	});
-
-	return toAccountDto(account);
+	return {
+		accounts: stored.rows.map(toAccountDto),
+		needsChoice: stored.needsChoice,
+	};
 }

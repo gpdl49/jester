@@ -42,6 +42,16 @@ describe("parseEnv", () => {
 });
 
 describe("features", () => {
+	it("needs the login configuration id for Instagram", () => {
+		const e = parseEnv({
+			...base,
+			INSTAGRAM_APP_ID: "1",
+			INSTAGRAM_APP_SECRET: "s",
+			TOKEN_ENCRYPTION_KEY: Buffer.alloc(32).toString("base64"),
+		});
+		expect(features(e).instagram).toBe(false);
+	});
+
 	it("derives switches from credentials", () => {
 		expect(features(parseEnv(base))).toEqual({
 			ai: false,
@@ -56,6 +66,7 @@ describe("features", () => {
 			IMMICH_DELETE_ENABLED: "true",
 			INSTAGRAM_APP_ID: "1",
 			INSTAGRAM_APP_SECRET: "s",
+			INSTAGRAM_CONFIG_ID: "c",
 			TOKEN_ENCRYPTION_KEY: Buffer.alloc(32).toString("base64"),
 		});
 		expect(features(all)).toEqual({

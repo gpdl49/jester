@@ -12,14 +12,16 @@ export const GET = withAuth(async (_request, _context, user) => {
 	const e = env();
 	const redirectUri = `${e.PUBLIC_URL}/api/instagram/callback`;
 
-	const authUrl = new URL("https://www.instagram.com/oauth/authorize");
+	// Facebook Login for Business dialog; the permissions live in the login
+	// configuration, so there is no `scope`.
+	const authUrl = new URL(
+		`https://www.facebook.com/${e.INSTAGRAM_GRAPH_VERSION}/dialog/oauth`,
+	);
 	authUrl.searchParams.set("client_id", e.INSTAGRAM_APP_ID as string);
+	authUrl.searchParams.set("config_id", e.INSTAGRAM_CONFIG_ID as string);
 	authUrl.searchParams.set("redirect_uri", redirectUri);
 	authUrl.searchParams.set("response_type", "code");
-	authUrl.searchParams.set(
-		"scope",
-		"instagram_business_basic,instagram_business_content_publish",
-	);
+	authUrl.searchParams.set("override_default_response_type", "true");
 	authUrl.searchParams.set("state", state);
 
 	const headers = new Headers();
