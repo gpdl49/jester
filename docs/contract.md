@@ -8,7 +8,7 @@ original creator, and posts them to an Instagram creator account on a schedule.
 
 | Area | Decision |
 |------|----------|
-| Code | Private repo [`gpdl49/memes`](https://github.com/gpdl49/memes), submodule at `projects/memes` (first-party, no `branch =` line). Foundation copied from Wardrobe (`lib/http`, `lib/auth`, `lib/jobs`, `lib/s3`, test helpers, CI, Dockerfile). |
+| Code | Private repo [`gpdl49/jester`](https://github.com/gpdl49/jester), submodule at `projects/jester` (first-party, no `branch =` line). Only the repository and image are called jester; every runtime name (namespace, host, roles, bucket, env) stays `memes`. Foundation copied from Wardrobe (`lib/http`, `lib/auth`, `lib/jobs`, `lib/s3`, test helpers, CI, Dockerfile). |
 | Stack | Next.js 16 (App Router, standalone output), TypeScript, Prisma 7 + `@prisma/adapter-pg`, Tailwind 4, Radix, TanStack Query, zod 4, sharp; Node 24, pnpm. Vitest for unit tests and Postgres-backed integration tests; MinIO for S3 in tests. |
 | Hosting | Centerpoint, namespace `memes-system`. One image, two Deployments: `memes` (web, `JOBS_ENABLED=false`) and `memes-worker` (same image, `JOBS_ENABLED=true`, no Service), so long imports never slow down the dashboard. |
 | Auth | oauth2-proxy sidecar with Zitadel OIDC, exactly as in Wardrobe. Role `memes` lets a user in (curate, schedule). Role `memes-admin` can also connect Instagram accounts, change settings and budgets, and purge. One shared library, not per-user; every write records its actor. |
@@ -21,7 +21,7 @@ original creator, and posts them to an Instagram creator account on a schedule.
 | Attribution | Two steps. (1) Clues from the analysis: watermarks, handles, subreddit, site logos. (2) A web-search pass through OpenRouter (`plugins: [{id: "web"}]`) with the OCR text and clues. It returns ranked candidates with a source URL, evidence and confidence; you confirm one. A `ReverseImageSearchProvider` interface ships with a no-op implementation so a paid provider can be added later. |
 | Instagram | Instagram API with Instagram Login (`graph.instagram.com`, permissions `instagram_business_basic` and `instagram_business_content_publish`). Single images and carousels of up to 10. A per-post JPEG rendition at 1080 px wide, padded to a ratio between 4:5 and 1.91:1, is served by a presigned S3 URL. A scheduler fills posting slots from the approved queue. The app enforces `content_publishing_limit` itself. |
 | AI budget | Every OpenRouter call is recorded in `AiUsage` with its cost. A daily budget (`AI_DAILY_BUDGET_USD`, default 3) pauses AI jobs until the next UTC day; the OpenRouter key has a monthly hard limit. |
-| CI | In the memes repo: lint, typecheck and tests on `ubuntu-latest`; the image is built on `homestacks-runners` and published as `ghcr.io/gpdl49/memes:main`, then rolled out by Flux image automation on Sinkhole. |
+| CI | In the jester repo: lint, typecheck and tests on `ubuntu-latest`; the image is built on `homestacks-runners` and published as `ghcr.io/gpdl49/jester:main`, then rolled out by Flux image automation on Sinkhole. |
 
 ### Rough cost
 
@@ -37,7 +37,7 @@ Every component is built against this section. Change it here first.
 |-------|-------|
 | Public host | `memes.vidur.xyz`, Centerpoint gateway listener `https-wildcard-vidur-xyz` |
 | Namespace | `memes-system` (Centerpoint) |
-| Image | `ghcr.io/gpdl49/memes`, tags `main` and `main-<sha>` (private; pulled with `ghcr-login`) |
+| Image | `ghcr.io/gpdl49/jester`, tags `main` and `main-<sha>` (private; pulled with `ghcr-login`) |
 | Image policy | `flux-system:memes` on Sinkhole, filter `^main$`, digest reflection |
 | Deployments | `memes` (web + oauth2-proxy sidecar, Service `memes` on port `4180` only) and `memes-worker` (no sidecar, no Service) |
 | App container | `127.0.0.1:3000`, UID 65532, read-only root; writable `/tmp` (emptyDir, 2 GiB) and `/app/.next/cache` |
@@ -274,7 +274,7 @@ Every slice runs `pnpm lint && pnpm typecheck && pnpm test && pnpm build` before
 
 | Path | What |
 |------|------|
-| `projects/memes` | App (submodule) |
+| `projects/jester` | App (submodule) |
 | `clusters/centerpoint/memes-system/` | `database/`, `secrets/`, `install/` (web and worker Deployments, Service, NetworkPolicies), `routing/`, `flux/` (like `wardrobe-system`) |
 | `clusters/sinkhole/memes-aws/` | Crossplane bucket (versioned), IAM user, policy, access key |
 | `clusters/sinkhole/crossplane-system/zitadel-apps/` | `memes` and `memes-admin` roles, OIDC app `memes` |

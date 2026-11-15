@@ -1,4 +1,6 @@
-# memes
+# jester
+
+The memes app (runtime names stay `memes`: namespace `memes-system`, host `memes.vidur.xyz`).
 
 Finds the memes in Immich, moves them to S3, tags them and looks for their
 creators with AI, and posts them to Instagram on a schedule. Design and
@@ -24,7 +26,7 @@ the matching features report `feature_disabled` (503) and stay off.
 
 ## Deployment
 
-CI builds `ghcr.io/gpdl49/memes:main`; Flux image automation on Sinkhole
+CI builds `ghcr.io/gpdl49/jester:main`; Flux image automation on Sinkhole
 rolls it out to `memes-system` on Centerpoint as two Deployments, `memes`
 (web) and `memes-worker` (`JOBS_ENABLED=true`). Manifests live in
 gpdl49/homestacks under `clusters/centerpoint/memes-system`.

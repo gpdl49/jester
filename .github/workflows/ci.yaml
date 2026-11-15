@@ -88,12 +88,12 @@ jobs:
           buildah --storage-driver=vfs bud \
             --isolation=chroot \
             --file Dockerfile \
-            --tag ghcr.io/gpdl49/memes:main \
-            --tag ghcr.io/gpdl49/memes:main-${{ github.sha }} \
+            --tag ghcr.io/gpdl49/jester:main \
+            --tag ghcr.io/gpdl49/jester:main-${{ github.sha }} \
             .
 
       - name: Push image
         run: |
-          for tag in ghcr.io/gpdl49/memes:main ghcr.io/gpdl49/memes:main-${{ github.sha }}; do
+          for tag in ghcr.io/gpdl49/jester:main ghcr.io/gpdl49/jester:main-${{ github.sha }}; do
             buildah --storage-driver=vfs push --tls-verify=true "$tag" "docker://$tag"
           done
