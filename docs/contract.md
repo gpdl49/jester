@@ -19,7 +19,7 @@ original creator, and posts them to an Instagram creator account on a schedule.
 | Ongoing sync | The worker polls Immich every 10 minutes (`updatedAfter` cursor), so screenshots that phone backup uploads to Immich go through the same pipeline. The dashboard also takes direct drag-and-drop uploads, which skip triage. |
 | Analysis | An OpenRouter vision model with strict JSON-schema output returns OCR text, a description, alt text, the meme template, topics, sensitivity flags (NSFW, politics, slurs, **visible personal data** such as names or phone numbers in chat screenshots), quality flags, an era estimate, a postability score, and a caption and hashtag draft. Perceptual hash (64-bit dHash) for near-duplicate detection. |
 | Attribution | Two steps. (1) Clues from the analysis: watermarks, handles, subreddit, site logos. (2) A web-search pass through OpenRouter (`plugins: [{id: "web"}]`) with the OCR text and clues. It returns ranked candidates with a source URL, evidence and confidence; you confirm one. A `ReverseImageSearchProvider` interface ships with a no-op implementation so a paid provider can be added later. |
-| Instagram | Instagram API with Instagram Login (`graph.instagram.com`, permissions `instagram_business_basic` and `instagram_business_content_publish`). Single images and carousels of up to 10. A per-post JPEG rendition at 1080 px wide, padded to a ratio between 4:5 and 1.91:1, is served by a presigned S3 URL. A scheduler fills posting slots from the approved queue. The app enforces `content_publishing_limit` itself. |
+| Instagram | Instagram API with Unified Login (Facebook Login for Business dialog; `graph.facebook.com`; Business Integration System User token; permissions `instagram_basic` and `instagram_content_publish`; no Facebook Page, but a business portfolio). Single images and carousels of up to 10. A per-post JPEG rendition at 1080 px wide, padded to a ratio between 4:5 and 1.91:1, is served by a presigned S3 URL. A scheduler fills posting slots from the approved queue. The app enforces `content_publishing_limit` itself. |
 | AI budget | Every OpenRouter call is recorded in `AiUsage` with its cost. A daily budget (`AI_DAILY_BUDGET_USD`, default 3) pauses AI jobs until the next UTC day; the OpenRouter key has a monthly hard limit. |
 | CI | In the jester repo: lint, typecheck and tests on `ubuntu-latest`; the image is built on `homestacks-runners` and published as `ghcr.io/gpdl49/jester:main`, then rolled out by Flux image automation on Sinkhole. |
 
@@ -50,7 +50,7 @@ Every component is built against this section. Change it here first.
 | IAM user | `centerpoint-jester`: `s3:GetObject`, `PutObject`, `DeleteObject`, `AbortMultipartUpload` on `media/*`, `ig/*` and `uploads/*`; `s3:ListBucket` |
 | OpenRouter key | `openrouter_api_key.jester_centerpoint` in `terraform/openrouter`, limit $40 monthly; output `jester_centerpoint_api_key` |
 | Immich | `https://immich.vidur.xyz/api`, an API key created by hand in Immich (Account settings → API keys) with permissions `asset.read`, `asset.view`, `asset.download`, `asset.delete` |
-| Instagram | Meta app created by hand (Instagram API with Instagram Login), redirect `https://jester.vidur.xyz/api/instagram/callback` |
+| Instagram | Meta app created by hand (use case "Manage messaging and content on Instagram", API setup with Unified Login, a login configuration with the permissions), redirect `https://jester.vidur.xyz/api/instagram/callback` |
 
 ### Object keys
 
@@ -74,7 +74,7 @@ HEIC originals are stored as they are; renditions use Immich's `fullsize` JPEG w
 | `jester-oauth2-proxy-cookie` | `cookie-secret` | SOPS |
 | `jester-app` | `token_encryption_key` (32 random bytes, base64) | SOPS |
 | `jester-immich` | `api_key` | SOPS, added by hand after creating the key in Immich (`optional: true` until then) |
-| `jester-instagram` | `app_id`, `app_secret` | SOPS, added by hand after creating the Meta app (`optional: true` until then) |
+| `jester-instagram` | `app_id`, `app_secret`, `config_id` | SOPS, added by hand after creating the Meta app and its login configuration. `app_id` and `app_secret` are the **Meta** app's, not an Instagram app's (`optional: true` until then) |
 | `ghcr-login` | `.dockerconfigjson` | SOPS (same value as Wardrobe's) |
 | `jester-pg-app` | CNPG-generated | CNPG |
 
@@ -99,8 +99,8 @@ AI_DAILY_BUDGET_USD=3
 IMMICH_URL=https://immich.vidur.xyz  IMMICH_API_KEY   # optional: sync off without it
 IMMICH_DELETE_ENABLED=true|false  # default false; true in production
 IMMICH_SYNC_INTERVAL_MINUTES=10
-INSTAGRAM_APP_ID  INSTAGRAM_APP_SECRET                # optional: publishing off without them
-INSTAGRAM_GRAPH_VERSION=v25.0
+INSTAGRAM_APP_ID  INSTAGRAM_APP_SECRET  INSTAGRAM_CONFIG_ID  # Meta app id and secret, login configuration id; optional: publishing off without them (and TOKEN_ENCRYPTION_KEY)
+INSTAGRAM_GRAPH_VERSION=v27.0
 SCHEDULE_TIMEZONE=Asia/Kolkata
 ```
 
@@ -146,7 +146,7 @@ Duplicates: an import whose SHA-256 equals an existing meme's (or whose dHash is
 - `AttributionCandidate`: `id`, `memeId`, `analysisId`, `creatorName`, `handle`, `platform` (`instagram` | `x` | `reddit` | `tiktok` | `tumblr` | `ninegag` | `ifunny` | `web` | `other`), `url`, `evidence`, `confidence` (0–1), `rank`, `confirmedById`, `confirmedAt`, `rejectedAt`.
 - `Upload`: `id`, `uploaderId`, `contentType`, `size`, `status` (`pending` | `complete` | `imported` | `failed`), `memeId`, timestamps.
 - `ImmichDeletion`: `id`, `immichAssetId`, `immichId`, `memeId`, `status` (`pending` | `done` | `skipped` | `failed`), `verifiedSha256`, `error`, `at`.
-- `InstagramAccount`: `id`, `igUserId` unique, `username`, `accessTokenEnc`, `tokenExpiresAt`, `connectedById`, `isDefault`, timestamps.
+- `InstagramAccount`: `id`, `igUserId` unique, `username`, `accessTokenEnc`, `tokenExpiresAt` (null = never expires), `needsReconnect` (Meta rejected the token), `connectedById`, `isDefault`, timestamps.
 - `Post`: `id`, `accountId`, `kind` (`image` | `carousel`), `status` (`draft` | `queued` | `publishing` | `published` | `failed` | `cancelled`), `caption`, `scheduledAt` (nullable: next free slot), `slotId`, `containerIds` string[], `igMediaId`, `permalink`, `publishedAt`, `attempts`, `error`, `createdById`, timestamps. `PostItem`: `postId`, `memeId`, `position` (0–9), `altText`; unique (`postId`, `position`). A meme can be in at most one non-cancelled post.
 - `ScheduleSlot`: `id`, `accountId`, `weekday` (0–6, 0 = Sunday), `time` (`HH:MM` in `SCHEDULE_TIMEZONE`), `enabled`.
 - `AiUsage`: `id`, `kind`, `model`, `promptTokens`, `completionTokens`, `costUsd`, `at`, `refId`.
@@ -167,7 +167,7 @@ Duplicates: an import whose SHA-256 equals an existing meme's (or whose dHash is
 | `instagram.render` | `{postId}` | Builds the `ig/<postId>/<n>.jpg` renditions. |
 | `instagram.publish` | `{postId}` | See Instagram below. |
 | `scheduler.tick` | `{}` | Cron every minute. Re-slots queued posts more than 2 h overdue (after a pause or outage) instead of bursting them. Re-enqueues posts stuck in `publishing`. Assigns slots to queued posts without `scheduledAt` (FIFO by queue position) and enqueues `instagram.publish` for due posts (`scheduledAt ≤ now`, `status: queued`) with `singletonKey: postId` on a `stately` queue. |
-| `instagram.refresh-tokens` | `{}` | Daily cron; refreshes tokens that expire within 10 days (`grant_type=ig_refresh_token`). |
+| `instagram.refresh-tokens` | `{}` | Daily cron; system-user tokens are not refreshed. Checks each token with `debug_token`, keeps `tokenExpiresAt` in sync (`expires_at` 0 = null) and sets `needsReconnect` for invalid tokens. |
 
 ### HTTP API (JSON, `/api`; response types in `lib/api/types.ts`)
 
@@ -198,8 +198,8 @@ POST   /uploads                                  {contentType, size} -> 201 {upl
 POST   /uploads/{id}/complete                    -> Upload (queues import.upload; idempotent)
 
 GET    /instagram/accounts                       -> InstagramAccount[] (no tokens)
-GET    /instagram/connect                        -> 302 to the Instagram authorize URL (admin; state cookie)
-GET    /instagram/callback?code&state            -> 302 /settings (exchange, long-lived token, store encrypted)
+GET    /instagram/connect                        -> 302 to the Facebook Login for Business dialog (admin; state cookie)
+GET    /instagram/callback?code&state            -> 302 /settings?instagram=connected|choose|no_accounts (exchange the code, list the reachable accounts, store encrypted)
 DELETE /instagram/accounts/{id}                  -> 204 (admin)
 GET    /instagram/accounts/{id}/limit            -> {used, total}
 
@@ -220,7 +220,10 @@ Error = {error: string, message: string}  (400, 401, 403, 404, 409, 422, 429 bud
 
 ### Instagram
 
-- **Connect:** `https://www.instagram.com/oauth/authorize?client_id=…&redirect_uri=…&response_type=code&scope=instagram_business_basic,instagram_business_content_publish&state=…`. Then `POST https://api.instagram.com/oauth/access_token` for a short-lived token, `GET https://graph.instagram.com/access_token?grant_type=ig_exchange_token` for a long-lived one (60 days), and `GET /me?fields=user_id,username`.
+- **Connect:** `https://www.facebook.com/<version>/dialog/oauth?client_id=<Meta app id>&config_id=<config id>&redirect_uri=…&response_type=code&override_default_response_type=true&state=…`. No `scope`: the permissions (`instagram_basic`, `instagram_content_publish`) live in the login configuration. The user signs in with Instagram or Facebook credentials and shares an Instagram professional account from a business portfolio.
+- **Callback:** `GET https://graph.facebook.com/<version>/oauth/access_token?client_id&client_secret&code` returns a Business Integration System User token (belongs to the client's business portfolio). `GET /me/assigned_instagram_accounts?fields=id,username` lists the accounts (needs `instagram_basic`); each is stored with the same encrypted token. A single account becomes the default; with several and no default the admin picks one in the `InstagramAccounts` card ("Make default"), and the publisher refuses to guess. Zero accounts stores nothing.
+- **Tokens:** a configuration's system-user token defaults to never expiring (`set_token_expires_in_60_days` makes it 60 days). `debug_token` (`expires_at` 0 = never) fills `tokenExpiresAt`. Error code 190, an invalid `debug_token`, or an expired date sets `needsReconnect`; the card shows it and the publisher fails posts with "reconnect the account". Reconnecting clears it. The token is revoked if the client removes the app from the portfolio or moves the account.
+- **Host:** every call is on `graph.facebook.com/<INSTAGRAM_GRAPH_VERSION>` (default v27.0) with the `access_token` parameter and the Instagram professional account id in the path.
 - **Publish (single):** `POST /{ig-user-id}/media {image_url, caption, alt_text}`, then poll `GET /{container}?fields=status_code` every 5 s for up to 2 minutes until `FINISHED`, then `POST /{ig-user-id}/media_publish {creation_id}`, then `GET /{media-id}?fields=permalink`.
 - **Publish (carousel):** child containers with `is_carousel_item=true`, then a parent container with `media_type=CAROUSEL&children=a,b,…&caption`, then publish.
 - **Idempotency:** the publisher claims a post atomically (`queued → publishing`, or a `publishing` post stale for 10 minutes). Container ids are saved before polling; editing the caption, memes or alt text drops them. A retry reuses unexpired containers (24 h; an already `PUBLISHED` container is adopted) and, on retries only, checks recent media for a matching caption not claimed by another post, so a timeout after publishing never makes a double post. Rate limits defer 1 h without using an attempt. At most 3 attempts with backoff; then `failed`, and the post returns to the queue on retry.
@@ -246,7 +249,7 @@ The foundation (`F`) lands on `main` first and holds every shared contract: the 
 | `analysis` | `lib/analysis/**`, job `analysis.meme`, `POST /memes/{id}/analyses` (`kind: meme`), `/api/tags` | JSON-schema validation and tag normalisation; user-edited fields are never overwritten; budget exceeded → 429 and the job is deferred |
 | `attribution` | `lib/attribution/**` (clues, web-search prompt, `ReverseImageSearchProvider`), job `attribution.find`, attribution routes, the attribution panel component `components/attribution/**` | candidate parsing and ranking; confirm and reject set the credit text; the no-op provider |
 | `library` | `lib/memes/**`, `/api/memes` (list, detail, patch, bulk, delete), `app/memes/**`, `components/memes/**` | filter and query building (full-text search, cursors); bulk actions; status transitions; component tests for the filter bar and the grid |
-| `instagram` | `lib/instagram/**` (OAuth, token crypto, Graph client, rendition, publisher), jobs `instagram.*`, `/api/instagram/**` | AES-GCM round-trip; the OAuth state check; the publish state machine with a stub Graph API (single, carousel, timeout then retry without a double post, rate-limit deferral); rendition aspect clamping |
+| `instagram` | `lib/instagram/**` (OAuth, token crypto, Graph client, rendition, publisher), jobs `instagram.*`, `/api/instagram/**` | AES-GCM round-trip; the OAuth dialog URL, state check, code exchange and account discovery (zero, one, several); 190 and token-expiry handling; the publish state machine with a stub Graph API (single, carousel, timeout then retry without a double post, rate-limit deferral); rendition aspect clamping |
 | `posts` | `lib/posts/**`, `lib/schedule/**`, job `scheduler.tick`, `/api/posts/**`, `/api/schedule/**`, `app/queue/**`, `app/calendar/**`, `app/posts/**` | slot computation across timezones and DST; FIFO filling; caption template and its limits; one active post per meme; reorder |
 | `admin` | `lib/settings/**`, `lib/audit/**` (the `audit()` writer used by all slices is in F), `/api/settings`, `/api/audit`, `/api/ai/usage`, `/api/stats` (except the sync fields), `app/page.tsx` (dashboard), `app/settings/**`, `app/activity/**` | settings validation and defaults; admin gating; stats aggregation |
 | `infra` (Codex, in homestacks) | everything under Layout below, plus `docs/README.md` and the Renovate exclusion for the private submodule | `kustomize build` for every touched Kustomization; hk hooks; `tofu validate` in `terraform/openrouter` |
@@ -282,12 +285,12 @@ Every slice runs `pnpm lint && pnpm typecheck && pnpm test && pnpm build` before
 | `clusters/sinkhole/flux-system/image-automation/` | ImageRepository and ImagePolicy `jester` |
 | `terraform/openrouter` | `jester_centerpoint` key |
 
-NetworkPolicy egress for both Deployments: DNS, `jester-pg` on 5432, and 443 to the internet outside the pod CIDR (S3, OpenRouter, Zitadel, `immich.vidur.xyz` on Sinkhole, `graph.instagram.com`, `api.instagram.com`).
+NetworkPolicy egress for both Deployments: DNS, `jester-pg` on 5432, and 443 to the internet outside the pod CIDR (S3, OpenRouter, Zitadel, `immich.vidur.xyz` on Sinkhole, `graph.facebook.com`, `www.facebook.com` for the browser only).
 
 ## Manual steps
 
 1. Create an Immich API key (permissions above) and add it as described in `clusters/centerpoint/jester-system/README.md`.
-2. Switch the Instagram account to a Creator account. Create a Meta app with the "Instagram API with Instagram Login" product, add the redirect URI and yourself as an Instagram tester, then add the app id and secret to `04-instagram.secret.yaml`. Connect the account from `/settings`.
+2. Switch the Instagram account to a Creator account. Create a Meta app owned by a business portfolio with the "Manage messaging & content on Instagram" use case, open "API setup with Unified login", create a login configuration with `instagram_basic` and `instagram_content_publish`, set the redirect URI, add the Instagram account as a tester, then add the Meta app id, app secret and configuration id to `04-instagram.secret.yaml`. Connect the account from `/settings`.
 3. Verify the Git-managed `jester` and `jester-admin` grants for yourself in Zitadel.
 4. Before the first backfill, calibrate: run triage on 200 candidates, review them, then decide whether to turn on auto-accept.
 
@@ -296,7 +299,7 @@ NetworkPolicy egress for both Deployments: DNS, `jester-pg` on 5432, and 443 to 
 Deferred; not in v1.
 
 - Videos and GIFs as Reels (v1 imports images only; GIFs post their first frame as a still and are marked).
-- Stories, engagement insights (`instagram_business_manage_insights`) and best-time-to-post.
+- Stories, engagement insights (`instagram_manage_insights`) and best-time-to-post.
 - An iOS Shortcut ingest endpoint with a personal token (phone backup to Immich covers new screenshots for now).
 - A paid reverse image search provider (SerpApi Google Lens) behind `ReverseImageSearchProvider`.
 - Finer roles for other users (viewer-only, approver) beyond `jester` and `jester-admin`.
