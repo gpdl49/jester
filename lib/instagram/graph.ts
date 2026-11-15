@@ -52,6 +52,8 @@ export type ExchangeCodeParams = {
 	clientId: string;
 	clientSecret: string;
 	code: string;
+	/** Must be identical to the dialog's redirect_uri (Meta error 100/36008). */
+	redirectUri: string;
 };
 
 export type DebugTokenParams = {
@@ -232,6 +234,7 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 			const url = new URL(`${graphBase}/oauth/access_token`);
 			url.searchParams.set("client_id", params.clientId);
 			url.searchParams.set("client_secret", params.clientSecret);
+			url.searchParams.set("redirect_uri", params.redirectUri);
 			url.searchParams.set("code", params.code);
 
 			const data = await request<{

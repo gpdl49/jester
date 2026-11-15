@@ -13,6 +13,11 @@ function safeEqual(a: string, b: string): boolean {
 	return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
+/** OAuth redirect URI; the dialog and the code exchange must send the same one. */
+export function instagramRedirectUri(): string {
+	return `${env().PUBLIC_URL}/api/instagram/callback`;
+}
+
 export function checkInstagramFeature(): void {
 	if (!features().instagram) {
 		throw featureDisabled("Instagram");
@@ -200,6 +205,7 @@ export async function handleOAuthCallback(
 		clientId: appId,
 		clientSecret: appSecret,
 		code: input.code,
+		redirectUri: instagramRedirectUri(),
 	});
 	const token = exchanged.accessToken;
 

@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { requireAdmin } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { withAuth } from "@/lib/http/handler";
-import { checkInstagramFeature } from "@/lib/instagram/service";
+import {
+	checkInstagramFeature,
+	instagramRedirectUri,
+} from "@/lib/instagram/service";
 
 export const GET = withAuth(async (_request, _context, user) => {
 	requireAdmin(user);
@@ -10,7 +13,7 @@ export const GET = withAuth(async (_request, _context, user) => {
 
 	const state = crypto.randomBytes(32).toString("hex");
 	const e = env();
-	const redirectUri = `${e.PUBLIC_URL}/api/instagram/callback`;
+	const redirectUri = instagramRedirectUri();
 
 	// Facebook Login for Business dialog; the permissions live in the login
 	// configuration, so there is no `scope`.
