@@ -18,6 +18,7 @@ export class GraphError extends Error {
 	readonly code?: number;
 	readonly errorSubcode?: number;
 	readonly isRateLimit: boolean;
+	/** Error 190: the token is invalid, expired or revoked; reconnect. */
 	readonly isTokenExpired: boolean;
 	readonly fbtraceId?: string;
 
@@ -38,6 +39,8 @@ export class GraphError extends Error {
 	}
 }
 
+export const DEFAULT_GRAPH_VERSION = "v27.0";
+
 export type GraphClientOptions = {
 	version?: string;
 	fetch?: typeof fetch;
@@ -48,18 +51,23 @@ export type GraphClientOptions = {
 export type ExchangeCodeParams = {
 	clientId: string;
 	clientSecret: string;
-	redirectUri: string;
 	code: string;
 };
 
-export type ExchangeLongLivedParams = {
-	clientSecret: string;
-	accessToken: string;
+export type DebugTokenParams = {
+	appId: string;
+	appSecret: string;
+	inputToken: string;
 };
 
-export type RefreshTokenParams = {
-	accessToken: string;
+export type DebugTokenResult = {
+	isValid: boolean;
+	/** null when the token never expires (`expires_at` of 0 or absent) */
+	expiresAt: Date | null;
+	scopes: string[];
 };
+
+export type AssignedInstagramAccount = { id: string; username: string };
 
 export type CreateImageContainerParams = {
 	igUserId?: string;
@@ -95,33 +103,44 @@ export type PublishingLimitResult = {
 	total: number;
 };
 
+/**
+ * Instagram API with Unified Login: every call goes to graph.facebook.com
+ * with a Business Integration System User access token and the Instagram
+ * professional account id in the path.
+ * https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login
+ */
 export function createGraphClient(options: GraphClientOptions = {}) {
 	// INSTAGRAM_GRAPH_VERSION (docs/jester.md) unless a caller pins one
 	const version =
-		options.version ?? process.env.INSTAGRAM_GRAPH_VERSION ?? "v25.0";
+		options.version ??
+		process.env.INSTAGRAM_GRAPH_VERSION ??
+		DEFAULT_GRAPH_VERSION;
 	const customFetch = options.fetch ?? fetch;
-	const graphBase = `https://graph.instagram.com/${version}`;
-	const oauthBase = "https://api.instagram.com/oauth";
+	const graphBase = `https://graph.facebook.com/${version}`;
 
-	function redact(msg: string, token?: string): string {
-		if (!token) return msg;
-		return msg.replaceAll(token, "[REDACTED]");
+	function redact(msg: string, secrets: Array<string | undefined>): string {
+		let out = msg;
+		for (const s of secrets) {
+			if (s) out = out.replaceAll(s, "[REDACTED]");
+		}
+		return out;
 	}
 
 	async function request<T>(
 		url: string,
 		init: RequestInit,
-		token?: string,
+		secrets: Array<string | undefined>,
 	): Promise<T> {
 		let res: Response;
 		try {
 			res = await customFetch(url, init);
 		} catch (err) {
-			const message = redact(
-				err instanceof Error ? err.message : String(err),
-				token,
-			);
-			throw new GraphError({ message });
+			throw new GraphError({
+				message: redact(
+					err instanceof Error ? err.message : String(err),
+					secrets,
+				),
+			});
 		}
 
 		let data: unknown;
@@ -142,7 +161,7 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 				...errPayload,
 				message: redact(
 					errPayload.message || "Instagram Graph API error",
-					token,
+					secrets,
 				),
 			});
 		}
@@ -154,6 +173,36 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 		}
 
 		return data as T;
+	}
+
+	function get<T>(
+		path: string,
+		params: Record<string, string>,
+		token: string,
+		secrets: Array<string | undefined> = [token],
+	): Promise<T> {
+		const url = new URL(`${graphBase}/${path}`);
+		for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+		url.searchParams.set("access_token", token);
+		return request<T>(url.toString(), { method: "GET" }, secrets);
+	}
+
+	function post<T>(
+		path: string,
+		params: Record<string, string>,
+		token: string,
+	): Promise<T> {
+		const body = new URLSearchParams(params);
+		body.set("access_token", token);
+		return request<T>(
+			`${graphBase}/${path}`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				body: body.toString(),
+			},
+			[token],
+		);
 	}
 
 	function resolveToken(token?: string): string {
@@ -174,117 +223,78 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 
 	return {
 		/**
-		 * Exchange an OAuth authorization code for a short-lived access token.
-		 * POST https://api.instagram.com/oauth/access_token
+		 * Exchange the login `code` for a Business Integration System User
+		 * access token. GET /oauth/access_token with the Meta app id and secret.
 		 */
 		async exchangeCode(
 			params: ExchangeCodeParams,
-		): Promise<{ accessToken: string; userId: string }> {
-			const body = new URLSearchParams({
-				client_id: params.clientId,
-				client_secret: params.clientSecret,
-				grant_type: "authorization_code",
-				redirect_uri: params.redirectUri,
-				code: params.code,
-			});
-
-			const data = await request<{
-				access_token: string;
-				user_id: string | number;
-			}>(
-				`${oauthBase}/access_token`,
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/x-www-form-urlencoded",
-					},
-					body: body.toString(),
-				},
-				params.clientSecret,
-			);
-
-			return {
-				accessToken: data.access_token,
-				userId: String(data.user_id),
-			};
-		},
-
-		/**
-		 * Exchange a short-lived token for a long-lived (60 days) token.
-		 * GET https://graph.instagram.com/access_token?grant_type=ig_exchange_token
-		 */
-		async exchangeLongLived(
-			params: ExchangeLongLivedParams,
-		): Promise<{ accessToken: string; tokenType: string; expiresIn: number }> {
-			const url = new URL("https://graph.instagram.com/access_token");
-			url.searchParams.set("grant_type", "ig_exchange_token");
+		): Promise<{ accessToken: string; expiresIn: number | null }> {
+			const url = new URL(`${graphBase}/oauth/access_token`);
+			url.searchParams.set("client_id", params.clientId);
 			url.searchParams.set("client_secret", params.clientSecret);
-			url.searchParams.set("access_token", params.accessToken);
+			url.searchParams.set("code", params.code);
 
 			const data = await request<{
 				access_token: string;
-				token_type: string;
-				expires_in: number;
-			}>(url.toString(), { method: "GET" }, params.accessToken);
+				expires_in?: number;
+			}>(url.toString(), { method: "GET" }, [params.clientSecret, params.code]);
 
 			return {
 				accessToken: data.access_token,
-				tokenType: data.token_type,
-				expiresIn: data.expires_in,
+				expiresIn: typeof data.expires_in === "number" ? data.expires_in : null,
 			};
 		},
 
 		/**
-		 * Refresh a long-lived access token before it expires.
-		 * GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token
+		 * Inspect a token. GET /debug_token with an app access token
+		 * (`app-id|app-secret`). `expires_at` 0 means the token never expires.
 		 */
-		async refreshToken(
-			params: RefreshTokenParams,
-		): Promise<{ accessToken: string; tokenType: string; expiresIn: number }> {
-			const url = new URL("https://graph.instagram.com/refresh_access_token");
-			url.searchParams.set("grant_type", "ig_refresh_token");
-			url.searchParams.set("access_token", params.accessToken);
-
-			const data = await request<{
-				access_token: string;
-				token_type: string;
-				expires_in: number;
-			}>(url.toString(), { method: "GET" }, params.accessToken);
-
+		async debugToken(params: DebugTokenParams): Promise<DebugTokenResult> {
+			const appToken = `${params.appId}|${params.appSecret}`;
+			const data = await get<{
+				data?: {
+					is_valid?: boolean;
+					expires_at?: number;
+					scopes?: string[];
+				};
+			}>("debug_token", { input_token: params.inputToken }, appToken, [
+				appToken,
+				params.appSecret,
+				params.inputToken,
+			]);
+			const d = data.data ?? {};
 			return {
-				accessToken: data.access_token,
-				tokenType: data.token_type,
-				expiresIn: data.expires_in,
+				isValid: d.is_valid === true,
+				expiresAt: d.expires_at ? new Date(d.expires_at * 1000) : null,
+				scopes: d.scopes ?? [],
 			};
 		},
 
 		/**
-		 * Retrieve authenticated user information (user_id, username).
-		 * GET /me?fields=user_id,username
+		 * List the Instagram professional accounts the client shared with the
+		 * app. GET /me/assigned_instagram_accounts (needs `instagram_basic`).
 		 */
-		async me(
+		async assignedInstagramAccounts(
 			token?: string,
-		): Promise<{ id: string; userId: string; username: string }> {
+		): Promise<AssignedInstagramAccount[]> {
 			const t = resolveToken(token);
-			const url = `${graphBase}/me?fields=user_id,username`;
-			const data = await request<{
-				id: string;
-				user_id?: string;
-				username: string;
-			}>(
-				url,
-				{
-					method: "GET",
-					headers: { Authorization: `Bearer ${t}` },
-				},
-				t,
-			);
-
-			return {
-				id: data.id,
-				userId: data.user_id ?? data.id,
-				username: data.username,
-			};
+			const accounts: AssignedInstagramAccount[] = [];
+			let after: string | undefined;
+			// A few pages at most; a client shares a handful of accounts.
+			for (let page = 0; page < 10; page++) {
+				const params: Record<string, string> = { fields: "id,username" };
+				if (after) params.after = after;
+				const res = await get<{
+					data?: Array<{ id: string; username?: string }>;
+					paging?: { cursors?: { after?: string }; next?: string };
+				}>("me/assigned_instagram_accounts", params, t);
+				for (const a of res.data ?? []) {
+					accounts.push({ id: String(a.id), username: a.username ?? a.id });
+				}
+				after = res.paging?.next ? res.paging.cursors?.after : undefined;
+				if (!after) break;
+			}
+			return accounts;
 		},
 
 		/**
@@ -297,33 +307,12 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 			const token = resolveToken(params.token);
 			const igUserId = resolveIgUserId(params.igUserId);
 
-			const body = new URLSearchParams({
-				image_url: params.imageUrl,
-			});
-			if (params.caption) {
-				body.set("caption", params.caption);
-			}
-			if (params.altText) {
-				body.set("alt_text", params.altText);
-				body.set("alt_text_user_provided", params.altText);
-			}
-			if (params.isCarouselItem) {
-				body.set("is_carousel_item", "true");
-			}
+			const body: Record<string, string> = { image_url: params.imageUrl };
+			if (params.caption) body.caption = params.caption;
+			if (params.altText) body.alt_text = params.altText;
+			if (params.isCarouselItem) body.is_carousel_item = "true";
 
-			const data = await request<{ id: string }>(
-				`${graphBase}/${igUserId}/media`,
-				{
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${token}`,
-						"Content-Type": "application/x-www-form-urlencoded",
-					},
-					body: body.toString(),
-				},
-				token,
-			);
-
+			const data = await post<{ id: string }>(`${igUserId}/media`, body, token);
 			return { id: data.id };
 		},
 
@@ -337,27 +326,13 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 			const token = resolveToken(params.token);
 			const igUserId = resolveIgUserId(params.igUserId);
 
-			const body = new URLSearchParams({
+			const body: Record<string, string> = {
 				media_type: "CAROUSEL",
 				children: params.children.join(","),
-			});
-			if (params.caption) {
-				body.set("caption", params.caption);
-			}
+			};
+			if (params.caption) body.caption = params.caption;
 
-			const data = await request<{ id: string }>(
-				`${graphBase}/${igUserId}/media`,
-				{
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${token}`,
-						"Content-Type": "application/x-www-form-urlencoded",
-					},
-					body: body.toString(),
-				},
-				token,
-			);
-
+			const data = await post<{ id: string }>(`${igUserId}/media`, body, token);
 			return { id: data.id };
 		},
 
@@ -370,18 +345,10 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 			token?: string,
 		): Promise<{ id: string; status_code: ContainerStatusCode }> {
 			const t = resolveToken(token);
-			const data = await request<{
+			const data = await get<{
 				id: string;
 				status_code: ContainerStatusCode;
-			}>(
-				`${graphBase}/${id}?fields=status_code`,
-				{
-					method: "GET",
-					headers: { Authorization: `Bearer ${t}` },
-				},
-				t,
-			);
-
+			}>(id, { fields: "status_code" }, t);
 			return { id: data.id, status_code: data.status_code };
 		},
 
@@ -409,23 +376,11 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 				token = resolveToken(creationIdOrParams.token ?? options?.token);
 			}
 
-			const body = new URLSearchParams({
-				creation_id: creationId,
-			});
-
-			const data = await request<{ id: string }>(
-				`${graphBase}/${igUserId}/media_publish`,
-				{
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${token}`,
-						"Content-Type": "application/x-www-form-urlencoded",
-					},
-					body: body.toString(),
-				},
+			const data = await post<{ id: string }>(
+				`${igUserId}/media_publish`,
+				{ creation_id: creationId },
 				token,
 			);
-
 			return { id: data.id };
 		},
 
@@ -439,15 +394,7 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 			token?: string,
 		): Promise<Record<string, unknown>> {
 			const t = resolveToken(token);
-			const url = `${graphBase}/${id}?fields=${fields.join(",")}`;
-			return request<Record<string, unknown>>(
-				url,
-				{
-					method: "GET",
-					headers: { Authorization: `Bearer ${t}` },
-				},
-				t,
-			);
+			return get<Record<string, unknown>>(id, { fields: fields.join(",") }, t);
 		},
 
 		/**
@@ -461,17 +408,11 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 		): Promise<{ data: RecentMediaItem[] }> {
 			const uid = resolveIgUserId(igUserId);
 			const t = resolveToken(token);
-			const url = `${graphBase}/${uid}/media?fields=id,caption,timestamp,permalink&limit=${limit}`;
-
-			const data = await request<{ data?: RecentMediaItem[] }>(
-				url,
-				{
-					method: "GET",
-					headers: { Authorization: `Bearer ${t}` },
-				},
+			const data = await get<{ data?: RecentMediaItem[] }>(
+				`${uid}/media`,
+				{ fields: "id,caption,timestamp,permalink", limit: String(limit) },
 				t,
 			);
-
 			return { data: data.data ?? [] };
 		},
 
@@ -485,9 +426,7 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 		): Promise<PublishingLimitResult> {
 			const uid = resolveIgUserId(igUserId);
 			const t = resolveToken(token);
-			const url = `${graphBase}/${uid}/content_publishing_limit?fields=config,quota_usage`;
-
-			const res = await request<{
+			const res = await get<{
 				data?: Array<{
 					quota_usage?: number;
 					config?: { quota_total?: number; quota_duration?: number };
@@ -497,11 +436,8 @@ export function createGraphClient(options: GraphClientOptions = {}) {
 				total?: number;
 				config?: { quota_total?: number };
 			}>(
-				url,
-				{
-					method: "GET",
-					headers: { Authorization: `Bearer ${t}` },
-				},
+				`${uid}/content_publishing_limit`,
+				{ fields: "config,quota_usage" },
 				t,
 			);
 

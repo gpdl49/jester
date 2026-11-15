@@ -38,6 +38,7 @@ describe("InstagramAccounts component", () => {
 					igUserId: "ig-1",
 					username: "meme_master",
 					tokenExpiresAt: futureDate,
+					needsReconnect: false,
 					isDefault: true,
 					createdAt: new Date().toISOString(),
 				},
@@ -46,6 +47,7 @@ describe("InstagramAccounts component", () => {
 					igUserId: "ig-2",
 					username: "second_account",
 					tokenExpiresAt: futureDate,
+					needsReconnect: false,
 					isDefault: false,
 					createdAt: new Date().toISOString(),
 				},
@@ -87,6 +89,7 @@ describe("InstagramAccounts component", () => {
 					igUserId: "ig-1",
 					username: "meme_master",
 					tokenExpiresAt: futureDate,
+					needsReconnect: false,
 					isDefault: defaultAcc === "acc-1",
 					createdAt: new Date().toISOString(),
 				},
@@ -95,6 +98,7 @@ describe("InstagramAccounts component", () => {
 					igUserId: "ig-2",
 					username: "second_account",
 					tokenExpiresAt: futureDate,
+					needsReconnect: false,
 					isDefault: defaultAcc === "acc-2",
 					createdAt: new Date().toISOString(),
 				},
@@ -108,6 +112,7 @@ describe("InstagramAccounts component", () => {
 					igUserId: "ig-2",
 					username: "second_account",
 					tokenExpiresAt: futureDate,
+					needsReconnect: false,
 					isDefault: true,
 					createdAt: new Date().toISOString(),
 				};
@@ -126,5 +131,81 @@ describe("InstagramAccounts component", () => {
 		await waitFor(() => {
 			expect(defaultAcc).toBe("acc-2");
 		});
+	});
+
+	it("shows non-expiring tokens and a reconnect message when Meta rejected the token", async () => {
+		const now = new Date().toISOString();
+		mockApi({
+			"GET /api/instagram/accounts": [
+				{
+					id: "a1",
+					igUserId: "1",
+					username: "never_expires",
+					tokenExpiresAt: null,
+					needsReconnect: false,
+					isDefault: true,
+					createdAt: now,
+				},
+				{
+					id: "a2",
+					igUserId: "2",
+					username: "revoked",
+					tokenExpiresAt: null,
+					needsReconnect: true,
+					isDefault: false,
+					createdAt: now,
+				},
+			],
+			"GET /api/instagram/accounts/a1/limit": { used: 0, total: 100 },
+			"GET /api/instagram/accounts/a2/limit": { used: 0, total: 100 },
+		});
+		renderWithQuery(<InstagramAccounts />);
+		await waitFor(() => {
+			expect(screen.getByText("Token does not expire")).toBeInTheDocument();
+		});
+		expect(screen.getByText(/Meta rejected this account/i)).toBeInTheDocument();
+	});
+
+	it("asks the admin to choose when several accounts have no default", async () => {
+		const now = new Date().toISOString();
+		const row = (id: string, name: string) => ({
+			id,
+			igUserId: id,
+			username: name,
+			tokenExpiresAt: null,
+			needsReconnect: false,
+			isDefault: false,
+			createdAt: now,
+		});
+		mockApi({
+			"GET /api/instagram/accounts": [row("a1", "one"), row("a2", "two")],
+			"GET /api/instagram/accounts/a1/limit": { used: 0, total: 100 },
+			"GET /api/instagram/accounts/a2/limit": { used: 0, total: 100 },
+		});
+		renderWithQuery(<InstagramAccounts />);
+		await waitFor(() => {
+			expect(
+				screen.getByText(/Several Instagram accounts/i),
+			).toBeInTheDocument();
+		});
+	});
+
+	it("lists the Unified Login setup steps when disabled", async () => {
+		mockApi({
+			"GET /api/instagram/accounts": new Response(
+				JSON.stringify({ error: "feature_disabled", message: "off" }),
+				{ status: 503, headers: { "Content-Type": "application/json" } },
+			),
+		});
+		renderWithQuery(<InstagramAccounts />);
+		await waitFor(() => {
+			expect(screen.getAllByText(/INSTAGRAM_CONFIG_ID/).length).toBeGreaterThan(
+				0,
+			);
+		});
+		expect(
+			screen.getByText("https://jester.vidur.xyz/api/instagram/callback"),
+		).toBeInTheDocument();
+		expect(screen.getByText(/Unified login/i)).toBeInTheDocument();
 	});
 });

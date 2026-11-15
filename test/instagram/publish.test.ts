@@ -89,7 +89,9 @@ describeWithDb("instagram publisher state machine", () => {
 						status_code: "FINISHED",
 					});
 				}
-				if (urlStr.includes("/media?fields=id,caption,timestamp,permalink")) {
+				if (
+					urlStr.includes("/media?fields=id%2Ccaption%2Ctimestamp%2Cpermalink")
+				) {
 					return Response.json({ data: [] });
 				}
 				if (urlStr.endsWith("/media") && init?.method === "POST") {
@@ -171,7 +173,9 @@ describeWithDb("instagram publisher state machine", () => {
 				if (urlStr.includes("?fields=status_code")) {
 					return Response.json({ status_code: "FINISHED" });
 				}
-				if (urlStr.includes("/media?fields=id,caption,timestamp,permalink")) {
+				if (
+					urlStr.includes("/media?fields=id%2Ccaption%2Ctimestamp%2Cpermalink")
+				) {
 					return Response.json({ data: [] });
 				}
 				if (urlStr.endsWith("/media") && init?.method === "POST") {
@@ -272,7 +276,9 @@ describeWithDb("instagram publisher state machine", () => {
 				if (urlStr.includes("/c_stuck?fields=status_code")) {
 					return Response.json({ id: "c_stuck", status_code: "FINISHED" });
 				}
-				if (urlStr.includes("/media?fields=id,caption,timestamp,permalink")) {
+				if (
+					urlStr.includes("/media?fields=id%2Ccaption%2Ctimestamp%2Cpermalink")
+				) {
 					return Response.json({ data: [] });
 				}
 				if (urlStr.endsWith("/media") && init?.method === "POST") {
@@ -337,7 +343,9 @@ describeWithDb("instagram publisher state machine", () => {
 					status_code: "FINISHED",
 				});
 			}
-			if (urlStr.includes("/media?fields=id,caption,timestamp,permalink")) {
+			if (
+				urlStr.includes("/media?fields=id%2Ccaption%2Ctimestamp%2Cpermalink")
+			) {
 				// Simulates that Meta already published this post earlier
 				return Response.json({
 					data: [

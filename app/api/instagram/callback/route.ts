@@ -43,7 +43,7 @@ export const GET = withAuth(async (request, _context, user) => {
 		"ig_oauth_state",
 	);
 
-	await handleOAuthCallback({
+	const result = await handleOAuthCallback({
 		code: query.code,
 		state: query.state,
 		cookieState,
@@ -51,7 +51,13 @@ export const GET = withAuth(async (request, _context, user) => {
 	});
 
 	const e = env();
-	const redirectUrl = `${e.PUBLIC_URL}/settings?instagram=connected`;
+	const outcome =
+		result.accounts.length === 0
+			? "no_accounts"
+			: result.needsChoice
+				? "choose"
+				: "connected";
+	const redirectUrl = `${e.PUBLIC_URL}/settings?instagram=${outcome}`;
 
 	const headers = new Headers();
 	headers.set("Location", redirectUrl);

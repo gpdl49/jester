@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { refreshExpiringTokens } from "@/lib/instagram/refresh";
+import { checkAccountTokens } from "@/lib/instagram/refresh";
 import { defineJob } from "@/lib/jobs/define";
 
 /**
  * `instagram.refresh-tokens` (docs/jester.md "Jobs").
- * Daily job to refresh Instagram tokens expiring within 10 days.
+ * Daily token check (debug_token); flags accounts that need reconnecting.
  */
 export const instagramRefreshTokens = defineJob({
 	name: "instagram.refresh-tokens",
@@ -12,6 +12,6 @@ export const instagramRefreshTokens = defineJob({
 	cron: { expression: "17 3 * * *", data: {} },
 	queue: { retryLimit: 2, retryDelay: 600 },
 	handler: async () => {
-		await refreshExpiringTokens();
+		await checkAccountTokens();
 	},
 });
