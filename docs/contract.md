@@ -21,7 +21,7 @@ original creator, and posts them to an Instagram creator account on a schedule.
 | Attribution | Two steps. (1) Clues from the analysis: watermarks, handles, subreddit, site logos. (2) A web-search pass through OpenRouter (`plugins: [{id: "web"}]`) with the OCR text and clues. It returns ranked candidates with a source URL, evidence and confidence; you confirm one. A `ReverseImageSearchProvider` interface ships with a no-op implementation so a paid provider can be added later. |
 | Instagram | Instagram API with Unified Login (Facebook Login for Business dialog; `graph.facebook.com`; Business Integration System User token; permissions `instagram_basic` and `instagram_content_publish`; no Facebook Page, but a business portfolio). Single images and carousels of up to 10. A per-post JPEG rendition at 1080 px wide, padded to a ratio between 4:5 and 1.91:1, is served by a presigned S3 URL. A scheduler fills posting slots from the approved queue. The app enforces `content_publishing_limit` itself. |
 | AI budget | Every OpenRouter call is recorded in `AiUsage` with its cost. A daily budget (`AI_DAILY_BUDGET_USD`, default 3) pauses AI jobs until the next UTC day; the OpenRouter key has a monthly hard limit. |
-| CI | In the jester repo: lint, typecheck and tests on `ubuntu-latest`; the image is built on `homestacks-runners` and published as `ghcr.io/gpdl49/jester:main`, then rolled out by Flux image automation on Sinkhole. |
+| CI | In the jester repo: lint, typecheck and tests on `ubuntu-latest`; the image is built with buildah, also on GitHub-hosted runners (the repo is public; the self-hosted ARC runners serve private repos only), and published as `ghcr.io/gpdl49/jester:main`, then rolled out by Flux image automation on Sinkhole. |
 
 ### Rough cost
 

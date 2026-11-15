@@ -1,3 +1,4 @@
+# No self-hosted labels: the repo is public, and the gpdl49 ARC runners serve
+# private repos only.
 self-hosted-runner:
-  labels:
-    - homestacks-runners
+  labels: []
