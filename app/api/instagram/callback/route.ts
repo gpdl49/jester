@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { badRequest } from "@/lib/http/errors";
 import { parseQuery, withAuth } from "@/lib/http/handler";
+import { GraphError } from "@/lib/instagram/graph";
 import { oauthCallbackQuerySchema } from "@/lib/instagram/schema";
 import { handleOAuthCallback } from "@/lib/instagram/service";
 
@@ -43,12 +44,26 @@ export const GET = withAuth(async (request, _context, user) => {
 		"ig_oauth_state",
 	);
 
-	const result = await handleOAuthCallback({
-		code: query.code,
-		state: query.state,
-		cookieState,
-		actorId: user.id,
-	});
+	let result: Awaited<ReturnType<typeof handleOAuthCallback>>;
+	try {
+		result = await handleOAuthCallback({
+			code: query.code,
+			state: query.state,
+			cookieState,
+			actorId: user.id,
+		});
+	} catch (err) {
+		if (!(err instanceof GraphError)) throw err;
+		// GraphError messages never carry tokens or secrets (they are redacted).
+		console.error("Instagram login failed", err);
+		return new Response(null, {
+			status: 302,
+			headers: new Headers([
+				["Location", `${env().PUBLIC_URL}/settings?instagram=error`],
+				["Set-Cookie", clearCookie],
+			]),
+		});
+	}
 
 	const e = env();
 	const outcome =

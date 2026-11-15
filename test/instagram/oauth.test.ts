@@ -218,6 +218,35 @@ describeWithDb("instagram oauth and accounts routes", () => {
 			);
 		}
 
+		it("a Meta error during the code exchange redirects to /settings?instagram=error", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					Response.json(
+						{
+							error: {
+								message: "Error validating verification code.",
+								type: "OAuthException",
+								code: 100,
+								error_subcode: 36008,
+							},
+						},
+						{ status: 400 },
+					),
+				),
+			);
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			const res = await callback();
+			expect(res.status).toBe(302);
+			expect(res.headers.get("Location")).toBe(
+				"http://localhost:3000/settings?instagram=error",
+			);
+			expect(res.headers.get("Set-Cookie")).toContain("Max-Age=0");
+			expect(errorSpy).toHaveBeenCalled();
+			errorSpy.mockRestore();
+			expect(await listAccounts()).toHaveLength(0);
+		});
+
 		it("one account: exchanges the code, stores it encrypted, makes it default, audits", async () => {
 			const g = graphStub({
 				accounts: [{ id: "1784149999", username: "great_memes" }],
@@ -234,6 +263,10 @@ describeWithDb("instagram oauth and accounts routes", () => {
 			expect(g.urls[0]).toContain("client_id=test_app_id");
 			expect(g.urls[0]).toContain("client_secret=test_app_secret");
 			expect(g.urls[0]).toContain("code=auth_code_xyz");
+			// identical to the dialog's redirect_uri, or Meta rejects the code
+			expect(
+				new URL(g.urls[0] as string).searchParams.get("redirect_uri"),
+			).toBe("http://localhost:3000/api/instagram/callback");
 
 			const accounts = await listAccounts();
 			expect(accounts).toHaveLength(1);
@@ -321,21 +354,6 @@ describeWithDb("instagram oauth and accounts routes", () => {
 			const accounts = await listAccounts();
 			expect(accounts).toHaveLength(1);
 			expect(accounts[0]?.needsReconnect).toBe(false);
-		});
-
-		it("a failed code exchange stores nothing", async () => {
-			vi.stubGlobal(
-				"fetch",
-				vi.fn(async () =>
-					Response.json(
-						{ error: { message: "Invalid verification code", code: 100 } },
-						{ status: 400 },
-					),
-				),
-			);
-			const res = await callback();
-			expect(res.status).toBeGreaterThanOrEqual(400);
-			expect(await listAccounts()).toHaveLength(0);
 		});
 	});
 

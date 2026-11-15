@@ -165,6 +165,9 @@ function ConnectNotice({ needsChoice }: { needsChoice: boolean }) {
 			"Login worked, but no Instagram professional account was shared. Switch the account to a Business or Creator account, and pick the business portfolio that owns it when signing in.";
 	} else if (outcome === "denied") {
 		text = "Instagram login was cancelled.";
+	} else if (outcome === "error") {
+		text =
+			"Meta rejected the login. Check that the redirect URI in the Meta app's Facebook Login for Business settings is exactly https://jester.vidur.xyz/api/instagram/callback, then try again. The server log has the details.";
 	} else if (needsChoice) {
 		text =
 			'Several Instagram accounts are connected. Choose which one publishes with "Make default".';

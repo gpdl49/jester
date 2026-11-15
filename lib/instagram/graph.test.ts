@@ -27,6 +27,7 @@ describe("instagram graph client (Unified Login)", () => {
 			clientId: "meta_app",
 			clientSecret: "meta_secret",
 			code: "the_code",
+			redirectUri: "https://jester.example/api/instagram/callback",
 		});
 		expect(res).toEqual({ accessToken: "SUAT_1", expiresIn: null });
 		const c = s.calls[0];
@@ -37,6 +38,7 @@ describe("instagram graph client (Unified Login)", () => {
 		expect(Object.fromEntries(c?.url.searchParams ?? [])).toEqual({
 			client_id: "meta_app",
 			client_secret: "meta_secret",
+			redirect_uri: "https://jester.example/api/instagram/callback",
 			code: "the_code",
 		});
 	});
@@ -47,6 +49,7 @@ describe("instagram graph client (Unified Login)", () => {
 			clientId: "a",
 			clientSecret: "b",
 			code: "c",
+			redirectUri: "https://x/cb",
 		});
 		expect(res.expiresIn).toBe(5184000);
 	});
@@ -251,6 +254,7 @@ describe("instagram graph client (Unified Login)", () => {
 				clientId: "a",
 				clientSecret: "SUPER_SECRET",
 				code: "SUPER_CODE",
+				redirectUri: "https://x/cb",
 			})
 			.catch((e) => e);
 		expect(e2.message).not.toContain("SUPER_SECRET");
