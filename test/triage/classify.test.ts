@@ -208,7 +208,8 @@ describeWithDb("Triage Classifier (runTriage)", () => {
 				WHERE name = 'triage.classify' AND data->>'immichAssetId' = ${asset.id}`;
 				expect(jobs).toHaveLength(1);
 				expect(jobs[0]?.wait).toBeGreaterThan(3500);
-				expect(jobs[0]?.wait).toBeLessThanOrEqual(3600);
+				// startAfter comes from the app clock, now() from Postgres: allow skew.
+				expect(jobs[0]?.wait).toBeLessThanOrEqual(3601);
 			} finally {
 				fakeImmich.restore();
 			}
