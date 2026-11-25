@@ -71,30 +71,33 @@ jobs:
       packages: write
     # GitHub-hosted: the repo is public, so its minutes are free, and the
     # self-hosted runners must never serve a public repo (a fork PR could
-    # retarget them). buildah needs the privileged container.
-    container:
-      image: quay.io/buildah/stable@sha256:ef42cb6cbbe374d1f2d9c8c8e65610b2c21beb277562b6d99a4b632cb78faa70
-      options: --privileged
+    # retarget them). Builds with the runner's own Docker: quay.io deletes old
+    # buildah digests, so a pinned build container stops resolving.
+    env:
+      IMAGE: ghcr.io/gpdl49/jester
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Login to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          printf '%s' '${{ secrets.GITHUB_TOKEN }}' | buildah login ghcr.io \
-            --username '${{ github.actor }}' \
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io \
+            --username "$GITHUB_ACTOR" \
             --password-stdin
 
+      # No provenance: it would turn each tag into an image index.
       - name: Build image
         run: |
-          buildah --storage-driver=vfs bud \
-            --isolation=chroot \
+          docker build \
+            --provenance=false \
             --file Dockerfile \
-            --tag ghcr.io/gpdl49/jester:main \
-            --tag ghcr.io/gpdl49/jester:main-${{ github.sha }} \
+            --tag "$IMAGE:main" \
+            --tag "$IMAGE:main-$GITHUB_SHA" \
             .
 
       - name: Push image
         run: |
-          for tag in ghcr.io/gpdl49/jester:main ghcr.io/gpdl49/jester:main-${{ github.sha }}; do
-            buildah --storage-driver=vfs push --tls-verify=true "$tag" "docker://$tag"
+          for tag in "$IMAGE:main" "$IMAGE:main-$GITHUB_SHA"; do
+            docker push "$tag"
           done
