@@ -1,0 +1,62 @@
+version: 2
+
+# Updates wait until a release is three days old; security updates don't wait.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    groups:
+      # These must move together, majors included.
+      prisma:
+        patterns: ["prisma", "@prisma/*"]
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      # Other majors get a PR each.
+      npm:
+        patterns: ["*"]
+        # pg-boss minors can migrate its database schema on startup.
+        exclude-patterns: ["pg-boss"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Follows the Node version (.node-version, Dockerfile).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # Prisma's npm "latest" tag points at 8.0.0 release candidates.
+      - dependency-name: "prisma"
+        versions: [">=8.0.0-a <8.0.0"]
+      - dependency-name: "@prisma/*"
+        versions: [">=8.0.0-a <8.0.0"]
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+      include: scope
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    ignore:
+      # Node majors move with .node-version.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: fix
+      include: scope
