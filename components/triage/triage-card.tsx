@@ -1,6 +1,12 @@
 "use client";
 
-import { Check, CheckCircle2, RotateCcw, XCircle } from "lucide-react";
+import {
+	Check,
+	CheckCircle2,
+	Maximize2,
+	RotateCcw,
+	XCircle,
+} from "lucide-react";
 import type { MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -16,6 +22,7 @@ export type TriageCardProps = {
 	onFocus: (index: number) => void;
 	onToggleSelect: (id: string) => void;
 	onShiftClick: (index: number) => void;
+	onView: (id: string) => void;
 	onAccept: (id: string) => void;
 	onReject: (id: string) => void;
 	onReset?: (id: string) => void;
@@ -31,6 +38,7 @@ export function TriageCard({
 	onFocus,
 	onToggleSelect,
 	onShiftClick,
+	onView,
 	onAccept,
 	onReject,
 	onReset,
@@ -76,6 +84,8 @@ export function TriageCard({
 			data-card-id={candidate.id}
 			onClick={handleClick}
 			onKeyDown={(e) => {
+				// Let the card's own buttons handle Enter and Space.
+				if (e.target !== e.currentTarget) return;
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
 					handleClick(e as unknown as MouseEvent);
@@ -130,9 +140,24 @@ export function TriageCard({
 				)}
 
 				{/* Model Reason Tooltip Overlay on hover/focus */}
-				<div className="pointer-events-none absolute inset-x-0 bottom-0 max-h-full translate-y-2 bg-gradient-to-t from-black/80 via-black/50 to-transparent p-2.5 text-xs text-white opacity-0 backdrop-blur-[1px] transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+				<div className="pointer-events-none absolute inset-x-0 bottom-0 max-h-full translate-y-2 bg-gradient-to-t from-black/80 via-black/50 to-transparent p-2.5 pr-11 text-xs text-white opacity-0 backdrop-blur-[1px] transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
 					<p className="line-clamp-3 leading-snug">{reasonText}</p>
 				</div>
+
+				{/* Opens the full image */}
+				<button
+					type="button"
+					data-view-button
+					aria-label="View larger image"
+					title="View larger (v)"
+					onClick={(e) => {
+						e.stopPropagation();
+						onView(candidate.id);
+					}}
+					className="absolute right-2 bottom-2 flex size-7 pointer-coarse:size-9 items-center justify-center rounded-lg border border-line bg-surface/80 text-fg shadow-xs backdrop-blur-xs transition outline-none hover:bg-surface focus-visible:ring-2 focus-visible:ring-accent"
+				>
+					<Maximize2 className="size-4" />
+				</button>
 			</div>
 
 			{/* Card Footer / Metadata */}
