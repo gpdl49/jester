@@ -25,6 +25,7 @@ import {
 } from "@/lib/client/triage";
 import { initialSelectionState, selectionReducer } from "./selection-reducer";
 import { TriageCard } from "./triage-card";
+import { TriageLightbox } from "./triage-lightbox";
 import { TriageToolbar } from "./triage-toolbar";
 import { TriageUndoBanner } from "./triage-undo-banner";
 import { useDragSelect } from "./use-drag-select";
@@ -41,6 +42,7 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 		fetchNextPage,
 		hasNextPage,
 		isFetchingNextPage,
+		isFetchNextPageError,
 	} = useTriageCandidates({ status });
 
 	const decisionsMutation = useTriageDecisions();
@@ -94,6 +96,41 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 	useEffect(() => {
 		dispatch({ type: "SET_ITEMS", itemIds: visibleIds });
 	}, [visibleIds]);
+
+	// Candidate open in the lightbox. Tracked by id, not index, so a refetch
+	// that shifts the list can't swap the image under the user.
+	const [viewedId, setViewedId] = useState<string | null>(null);
+	const viewedIndex = viewedId ? visibleIds.indexOf(viewedId) : -1;
+	const viewed = visibleCandidates[viewedIndex] ?? null;
+	const lastViewedIdRef = useRef<string | null>(null);
+	if (viewed) lastViewedIdRef.current = viewed.id;
+
+	// The grid's focus follows the lightbox; close it if its image goes away.
+	useEffect(() => {
+		if (viewedId === null) return;
+		if (viewedIndex >= 0) dispatch({ type: "FOCUS_INDEX", index: viewedIndex });
+		else setViewedId(null);
+	}, [viewedId, viewedIndex]);
+
+	// The page doesn't scroll under the lightbox, so load more from here.
+	useEffect(() => {
+		if (
+			viewedIndex >= 0 &&
+			viewedIndex >= visibleIds.length - 5 &&
+			hasNextPage &&
+			!isFetchingNextPage &&
+			!isFetchNextPageError
+		) {
+			fetchNextPage();
+		}
+	}, [
+		viewedIndex,
+		visibleIds.length,
+		hasNextPage,
+		isFetchingNextPage,
+		isFetchNextPageError,
+		fetchNextPage,
+	]);
 
 	// Undo timer state
 	const [secondsRemaining, setSecondsRemaining] = useState(5);
@@ -190,6 +227,9 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 		if (countdownRef.current) clearInterval(countdownRef.current);
 		timerRef.current = null;
 		countdownRef.current = null;
+		// Show the last undone image again if the lightbox is still open.
+		const last = pendingRef.current.at(-1);
+		if (last) setViewedId((id) => (id === null ? null : last.id));
 		setPendingDecisions([]);
 		setSecondsRemaining(5);
 	}, []);
@@ -254,21 +294,43 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 		[selection.selectedIds, focusedId, queueDecisions],
 	);
 
+	// Lightbox actions: always the image on screen, never the grid selection
+	const viewAt = (index: number) => {
+		const id = visibleIds[index];
+		if (id) setViewedId(id);
+	};
+	const decideViewed = (decision: "accept" | "reject") => {
+		if (!viewed) return;
+		setViewedId(
+			visibleIds[viewedIndex + 1] ?? visibleIds[viewedIndex - 1] ?? null,
+		);
+		queueDecisions([viewed.id], decision);
+	};
+
 	// Keyboard bindings hook
 	const canDecide =
 		status === "scored" || status === "pending" || status === "error";
 	useTriageKeyboard({
-		onNext: () => dispatch({ type: "FOCUS_NEXT" }),
-		onPrev: () => dispatch({ type: "FOCUS_PREV" }),
+		onNext: () =>
+			viewed ? viewAt(viewedIndex + 1) : dispatch({ type: "FOCUS_NEXT" }),
+		onPrev: () =>
+			viewed ? viewAt(viewedIndex - 1) : dispatch({ type: "FOCUS_PREV" }),
 		onToggleSelect: () => {
+			// Selection isn't visible in the lightbox.
+			if (viewed) return;
 			if (focusedId) dispatch({ type: "TOGGLE_SELECT", id: focusedId });
 		},
 		onAccept: (isBulk) => {
-			if (canDecide) handleAcceptBulk(isBulk);
+			if (!canDecide) return;
+			if (viewed) decideViewed("accept");
+			else handleAcceptBulk(isBulk);
 		},
 		onReject: (isBulk) => {
-			if (canDecide) handleRejectBulk(isBulk);
+			if (!canDecide) return;
+			if (viewed) decideViewed("reject");
+			else handleRejectBulk(isBulk);
 		},
+		onView: () => setViewedId(viewed ? null : (focusedId ?? null)),
 		enabled: visibleCandidates.length > 0,
 	});
 
@@ -304,6 +366,13 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 		observer.observe(target);
 		return () => observer.disconnect();
 	}, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+	const undoBannerProps = {
+		count: pendingDecisions.length,
+		secondsRemaining,
+		onUndo: handleUndo,
+		onFlushNow: flushPendingDecisions,
+	};
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -379,6 +448,7 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 								onShiftClick={(toIndex) =>
 									dispatch({ type: "SELECT_RANGE", toIndex })
 								}
+								onView={setViewedId}
 								onAccept={handleAcceptSingle}
 								onReject={handleRejectSingle}
 								onReset={async (id) => {
@@ -401,11 +471,26 @@ export function TriageView({ isAdmin = false }: { isAdmin?: boolean }) {
 			</div>
 
 			{/* 5-second Undo Banner */}
-			<TriageUndoBanner
-				count={pendingDecisions.length}
-				secondsRemaining={secondsRemaining}
-				onUndo={handleUndo}
-				onFlushNow={flushPendingDecisions}
+			{!viewed && <TriageUndoBanner {...undoBannerProps} />}
+
+			<TriageLightbox
+				candidate={viewed}
+				position={viewedIndex + 1}
+				total={visibleIds.length}
+				canDecide={canDecide}
+				onClose={() => setViewedId(null)}
+				onRestoreFocus={() =>
+					gridRef.current
+						?.querySelector<HTMLElement>(
+							`[data-card-id="${lastViewedIdRef.current}"] [data-view-button]`,
+						)
+						?.focus()
+				}
+				onNext={() => viewAt(viewedIndex + 1)}
+				onPrev={() => viewAt(viewedIndex - 1)}
+				onAccept={() => decideViewed("accept")}
+				onReject={() => decideViewed("reject")}
+				undoBanner={<TriageUndoBanner {...undoBannerProps} inline />}
 			/>
 		</div>
 	);

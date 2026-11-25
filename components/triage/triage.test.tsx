@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TriageCandidateDto } from "@/lib/api/types";
 import { mockApi, renderWithQuery } from "@/test/helpers/dom";
@@ -299,6 +306,141 @@ describe("TriageView component", () => {
 			decisions: [{ immichAssetId: candidate1.id, decision: "accept" }],
 		});
 		vi.useRealTimers();
+	});
+
+	it("opens the uncropped image and steps through candidates", async () => {
+		mockApi({
+			"GET /api/triage": {
+				items: [candidate1, candidate2, candidate3],
+				nextCursor: null,
+			},
+		});
+		renderWithQuery(<TriageView isAdmin={false} />);
+		await screen.findByText("funny_cat.png");
+
+		const card2 = screen.getByTestId(`triage-card-${candidate2.id}`);
+		const viewButton = within(card2).getByRole("button", {
+			name: "View larger image",
+		});
+		fireEvent.click(viewButton);
+
+		const dialog = screen.getByRole("dialog", { name: "screenshot_chat.png" });
+		const image = within(dialog).getByRole("img");
+		expect(image).toHaveAttribute("src", candidate2.previewUrl);
+		expect(image.className).toContain("object-contain");
+		expect(within(dialog).getByText(/2 of 3/)).toBeInTheDocument();
+
+		// Zoom, then move on: the next image starts fitted again.
+		fireEvent.click(within(dialog).getByRole("button", { name: "Zoom in" }));
+		expect(within(dialog).getByRole("img").className).toContain("max-w-none");
+		fireEvent.keyDown(dialog, { key: "ArrowRight" });
+		expect(within(dialog).getByRole("img")).toHaveAttribute(
+			"src",
+			candidate3.previewUrl,
+		);
+		expect(within(dialog).getByRole("img").className).toContain(
+			"object-contain",
+		);
+		expect(
+			within(dialog).getByRole("button", { name: "Next image" }),
+		).toBeDisabled();
+
+		// Closing leaves the grid on the image last viewed.
+		fireEvent.keyDown(dialog, { key: "Escape" });
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		const card3 = screen.getByTestId(`triage-card-${candidate3.id}`);
+		expect(card3.className).toContain("ring-2");
+		await waitFor(() =>
+			expect(
+				within(card3).getByRole("button", { name: "View larger image" }),
+			).toHaveFocus(),
+		);
+	});
+
+	it("toggles the larger image with v", async () => {
+		mockApi({
+			"GET /api/triage": { items: [candidate1], nextCursor: null },
+		});
+		renderWithQuery(<TriageView isAdmin={false} />);
+		// Keys act on the focused card, so wait until the grid has one.
+		await waitFor(() =>
+			expect(
+				screen.getByTestId(`triage-card-${candidate1.id}`).className,
+			).toContain("ring-2"),
+		);
+
+		fireEvent.keyDown(window, { key: "v" });
+		expect(
+			screen.getByRole("dialog", { name: "funny_cat.png" }),
+		).toBeInTheDocument();
+		fireEvent.keyDown(window, { key: "v" });
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("decides only the image on screen, advances, and can undo", async () => {
+		mockApi({
+			"GET /api/triage": {
+				items: [candidate1, candidate2, candidate3],
+				nextCursor: null,
+			},
+			"POST /api/triage/decisions": { accepted: 0, rejected: 1 },
+		});
+		renderWithQuery(<TriageView isAdmin={false} />);
+		await screen.findByText("funny_cat.png");
+
+		// Select cards 1 and 3, then reject card 2 from the lightbox.
+		for (const c of [candidate1, candidate3]) {
+			fireEvent.click(
+				within(screen.getByTestId(`triage-card-${c.id}`)).getByRole("button", {
+					name: "Select item",
+				}),
+			);
+		}
+		fireEvent.click(
+			within(screen.getByTestId(`triage-card-${candidate2.id}`)).getByRole(
+				"button",
+				{ name: "View larger image" },
+			),
+		);
+		fireEvent.keyDown(window, { key: "R" });
+
+		const dialog = screen.getByRole("dialog", { name: "webcomic.png" });
+		expect(screen.getByTestId(`triage-card-${candidate1.id}`)).toBeVisible();
+		expect(
+			screen.queryByTestId(`triage-card-${candidate2.id}`),
+		).not.toBeInTheDocument();
+		expect(within(dialog).getByText("Decided 1 candidate")).toBeInTheDocument();
+
+		fireEvent.click(within(dialog).getByRole("button", { name: "Undo" }));
+		expect(
+			screen.getByRole("dialog", { name: "screenshot_chat.png" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByTestId(`triage-card-${candidate2.id}`),
+		).toBeInTheDocument();
+	});
+
+	it("closes the larger image after the last candidate is decided", async () => {
+		mockApi({
+			"GET /api/triage": { items: [candidate1], nextCursor: null },
+			"POST /api/triage/decisions": { accepted: 1, rejected: 0 },
+		});
+		renderWithQuery(<TriageView isAdmin={false} />);
+		// Keys act on the focused card, so wait until the grid has one.
+		await waitFor(() =>
+			expect(
+				screen.getByTestId(`triage-card-${candidate1.id}`).className,
+			).toContain("ring-2"),
+		);
+
+		fireEvent.keyDown(window, { key: "v" });
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", {
+				name: "Accept",
+			}),
+		);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(screen.getByText("Decided 1 candidate")).toBeInTheDocument();
 	});
 
 	it("selects a range with shift-click", async () => {

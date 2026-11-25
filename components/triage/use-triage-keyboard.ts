@@ -8,6 +8,7 @@ export type KeyboardHandlers = {
 	onToggleSelect: () => void;
 	onAccept: (isBulk: boolean) => void;
 	onReject: (isBulk: boolean) => void;
+	onView: () => void;
 	enabled?: boolean;
 };
 
@@ -17,6 +18,7 @@ export function useTriageKeyboard({
 	onToggleSelect,
 	onAccept,
 	onReject,
+	onView,
 	enabled = true,
 }: KeyboardHandlers) {
 	useEffect(() => {
@@ -64,6 +66,9 @@ export function useTriageKeyboard({
 			} else if (e.key === "R") {
 				e.preventDefault();
 				onReject(true);
+			} else if (e.key === "v") {
+				e.preventDefault();
+				onView();
 			}
 		}
 
@@ -71,5 +76,5 @@ export function useTriageKeyboard({
 		return () => {
 			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [enabled, onNext, onPrev, onToggleSelect, onAccept, onReject]);
+	}, [enabled, onNext, onPrev, onToggleSelect, onAccept, onReject, onView]);
 }
